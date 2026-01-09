@@ -15,7 +15,7 @@ class TestGetDatasourceTypeTools:
         """Test that get_datasource_type_tools returns a list."""
         tools = get_datasource_type_tools()
         assert isinstance(tools, list)
-        assert len(tools) == 22
+        assert len(tools) == 23
 
     def test_all_tools_have_required_fields(self):
         """Test that all tools have name, description, and inputSchema."""
@@ -44,6 +44,7 @@ class TestGetDatasourceTypeTools:
             "update_datasource_type_property",
             "delete_datasource_type_property",
             "list_datasource_type_methods",
+            "get_datasource_type_method",
             "create_datasource_type_method",
             "update_datasource_type_method",
             "delete_datasource_type_method",
@@ -135,6 +136,25 @@ class TestHandleDatasourceTypeTool:
         await client.close()
 
     @pytest.mark.asyncio
+    async def test_get_datasource_type_without_properties_and_methods(self, client, mock_api, sample_datasource_types):
+        """Test get_datasource_type tool with include_properties=False and include_methods=False."""
+        ds_type = sample_datasource_types[0]
+        mock_api.get("/datasource_types/ds_type/1/").mock(return_value=Response(200, json=ds_type))
+
+        result = await handle_datasource_type_tool(
+            "get_datasource_type",
+            {"type_id": 1, "include_properties": False, "include_methods": False},
+            client,
+        )
+
+        assert result is not None
+        data = json.loads(result[0].text)
+        assert "type" in data
+        assert "properties" not in data
+        assert "methods" not in data
+        await client.close()
+
+    @pytest.mark.asyncio
     async def test_create_datasource_type(self, client, mock_api):
         """Test create_datasource_type tool."""
         new_type = {"id": 3, "name": "NewType", "description": "New type", "version": "1.0"}
@@ -215,6 +235,25 @@ class TestHandleDatasourceTypeTool:
         assert result is not None
         data = json.loads(result[0].text)
         assert "methods" in data
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_datasource_type_method(self, client, mock_api):
+        """Test get_datasource_type_method tool."""
+        method = {"id": 5, "name": "query", "label": "query", "code": "def query(): pass", "mds_type_id": 1}
+        params = [{"id": 1, "label": "sql", "method_id": 5}]
+        mock_api.get("/datasource_types/method/5/").mock(return_value=Response(200, json=method))
+        mock_api.get("/datasource_types/method_params/").mock(return_value=Response(200, json=params))
+
+        result = await handle_datasource_type_tool(
+            "get_datasource_type_method", {"method_id": 5}, client
+        )
+
+        assert result is not None
+        data = json.loads(result[0].text)
+        assert "method" in data
+        assert "parameters" in data
+        assert data["method"]["code"] == "def query(): pass"
         await client.close()
 
     @pytest.mark.asyncio

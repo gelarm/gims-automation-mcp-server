@@ -124,6 +124,24 @@ class TestHandleActivatorTypeTool:
         await client.close()
 
     @pytest.mark.asyncio
+    async def test_get_activator_type_without_properties(self, client, mock_api, sample_activator_types):
+        """Test get_activator_type tool with include_properties=False."""
+        act_type = sample_activator_types[0]
+        mock_api.get("/activator_types/activator_type/1/").mock(return_value=Response(200, json=act_type))
+
+        result = await handle_activator_type_tool(
+            "get_activator_type",
+            {"type_id": 1, "include_properties": False},
+            client,
+        )
+
+        assert result is not None
+        data = json.loads(result[0].text)
+        assert "type" in data
+        assert "properties" not in data
+        await client.close()
+
+    @pytest.mark.asyncio
     async def test_create_activator_type(self, client, mock_api):
         """Test create_activator_type tool."""
         new_type = {"id": 3, "name": "NewActivator", "code": "pass", "version": "1.0"}

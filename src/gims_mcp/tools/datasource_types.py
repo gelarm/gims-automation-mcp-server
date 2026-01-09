@@ -31,6 +31,7 @@ async def handle_datasource_type_tool(name: str, arguments: dict, client: GimsCl
             "update_datasource_type_property": _update_datasource_type_property,
             "delete_datasource_type_property": _delete_datasource_type_property,
             "list_datasource_type_methods": _list_datasource_type_methods,
+            "get_datasource_type_method": _get_datasource_type_method,
             "create_datasource_type_method": _create_datasource_type_method,
             "update_datasource_type_method": _update_datasource_type_method,
             "delete_datasource_type_method": _delete_datasource_type_method,
@@ -102,10 +103,14 @@ def get_datasource_type_tools() -> list[Tool]:
         ),
         Tool(
             name="get_datasource_type",
-            description="Get a datasource type with its properties and methods",
+            description="Get a datasource type. Use include_properties=false and include_methods=false to get only basic type info (useful when full response is too large)",
             inputSchema={
                 "type": "object",
-                "properties": {"type_id": {"type": "integer", "description": "Type ID"}},
+                "properties": {
+                    "type_id": {"type": "integer", "description": "Type ID"},
+                    "include_properties": {"type": "boolean", "description": "Include properties (default: true)"},
+                    "include_methods": {"type": "boolean", "description": "Include methods with code (default: true)"},
+                },
                 "required": ["type_id"],
             },
         ),
@@ -205,11 +210,20 @@ def get_datasource_type_tools() -> list[Tool]:
         # Methods
         Tool(
             name="list_datasource_type_methods",
-            description="List all methods of a datasource type",
+            description="List all methods of a datasource type (without code, use get_datasource_type_method for full code)",
             inputSchema={
                 "type": "object",
                 "properties": {"mds_type_id": {"type": "integer", "description": "Datasource type ID"}},
                 "required": ["mds_type_id"],
+            },
+        ),
+        Tool(
+            name="get_datasource_type_method",
+            description="Get a single method with its full code and parameters",
+            inputSchema={
+                "type": "object",
+                "properties": {"method_id": {"type": "integer", "description": "Method ID"}},
+                "required": ["method_id"],
             },
         ),
         Tool(
@@ -367,19 +381,23 @@ async def _list_datasource_types(client: GimsClient, arguments: dict) -> list[Te
 
 async def _get_datasource_type(client: GimsClient, arguments: dict) -> list[TextContent]:
     type_id = arguments["type_id"]
+    include_properties = arguments.get("include_properties", True)
+    include_methods = arguments.get("include_methods", True)
+
     ds_type = await client.get_datasource_type(type_id)
-    properties = await client.list_datasource_type_properties(type_id)
-    methods = await client.list_datasource_type_methods(type_id)
+    result = {"type": ds_type}
 
-    # Get parameters for each method
-    for method in methods:
-        method["parameters"] = await client.list_method_parameters(method["id"])
+    if include_properties:
+        properties = await client.list_datasource_type_properties(type_id)
+        result["properties"] = properties
 
-    result = {
-        "type": ds_type,
-        "properties": properties,
-        "methods": methods,
-    }
+    if include_methods:
+        methods = await client.list_datasource_type_methods(type_id)
+        # Get parameters for each method
+        for method in methods:
+            method["parameters"] = await client.list_method_parameters(method["id"])
+        result["methods"] = methods
+
     response = check_response_size(result)
     return [TextContent(type="text", text=response)]
 
@@ -436,6 +454,18 @@ async def _list_datasource_type_methods(client: GimsClient, arguments: dict) -> 
     # Remove code from list to reduce size
     methods_no_code = [{k: v for k, v in m.items() if k != "code"} for m in methods]
     response = check_response_size({"methods": methods_no_code})
+    return [TextContent(type="text", text=response)]
+
+
+async def _get_datasource_type_method(client: GimsClient, arguments: dict) -> list[TextContent]:
+    method_id = arguments["method_id"]
+    method = await client.get_datasource_type_method(method_id)
+    parameters = await client.list_method_parameters(method_id)
+    result = {
+        "method": method,
+        "parameters": parameters,
+    }
+    response = check_response_size(result)
     return [TextContent(type="text", text=response)]
 
 

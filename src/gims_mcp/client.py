@@ -302,6 +302,12 @@ class GimsClient:
         response = await client.get("/datasource_types/method/", params={"mds_type_id": mds_type_id})
         return self._handle_response(response)
 
+    async def get_datasource_type_method(self, method_id: int) -> dict:
+        """Get a single datasource type method by ID."""
+        client = await self._get_client()
+        response = await client.get(f"/datasource_types/method/{method_id}/")
+        return self._handle_response(response)
+
     async def create_datasource_type_method(
         self, mds_type_id: int, name: str, label: str, code: str = "# Method code\npass", description: str = ""
     ) -> dict:

@@ -94,10 +94,13 @@ def get_activator_type_tools() -> list[Tool]:
         ),
         Tool(
             name="get_activator_type",
-            description="Get an activator type with its code and properties",
+            description="Get an activator type with its code. Use include_properties=false to get only the type with code (useful when full response is too large)",
             inputSchema={
                 "type": "object",
-                "properties": {"type_id": {"type": "integer", "description": "Type ID"}},
+                "properties": {
+                    "type_id": {"type": "integer", "description": "Type ID"},
+                    "include_properties": {"type": "boolean", "description": "Include properties (default: true)"},
+                },
                 "required": ["type_id"],
             },
         ),
@@ -263,12 +266,15 @@ async def _list_activator_types(client: GimsClient, arguments: dict) -> list[Tex
 
 async def _get_activator_type(client: GimsClient, arguments: dict) -> list[TextContent]:
     type_id = arguments["type_id"]
+    include_properties = arguments.get("include_properties", True)
+
     act_type = await client.get_activator_type(type_id)
-    properties = await client.list_activator_type_properties(type_id)
-    result = {
-        "type": act_type,
-        "properties": properties,
-    }
+    result = {"type": act_type}
+
+    if include_properties:
+        properties = await client.list_activator_type_properties(type_id)
+        result["properties"] = properties
+
     response = check_response_size(result)
     return [TextContent(type="text", text=response)]
 
