@@ -58,7 +58,11 @@ class TestHandleScriptTool:
         assert len(result) == 1
         data = json.loads(result[0].text)
         assert "folders" in data
-        assert len(data["folders"]) == 3
+        # 3 sample folders + 1 synthetic root folder
+        assert len(data["folders"]) == 4
+        # First folder should be synthetic root
+        assert data["folders"][0]["is_root"] is True
+        assert data["folders"][0]["path"] == "/"
         await client.close()
 
     @pytest.mark.asyncio

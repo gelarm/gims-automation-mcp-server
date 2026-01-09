@@ -1,16 +1,58 @@
 """Utility functions for GIMS MCP Server."""
 
+import json
 import re
 from typing import Any
 
+# Maximum response size in bytes (10KB)
+MAX_RESPONSE_SIZE = 10 * 1024
 
-def build_folder_paths(folders: list[dict], id_field: str = "id", parent_field: str = "parent_folder_id") -> list[dict]:
+
+class ResponseTooLargeError(Exception):
+    """Raised when response exceeds maximum allowed size."""
+
+    def __init__(self, size: int, limit: int = MAX_RESPONSE_SIZE):
+        self.size = size
+        self.limit = limit
+        super().__init__(
+            f"Response too large ({size // 1024}KB, limit {limit // 1024}KB). "
+            "Please refine your query to reduce results."
+        )
+
+
+def check_response_size(data: Any, limit: int = MAX_RESPONSE_SIZE) -> str:
+    """Check response size and return JSON string if within limit.
+
+    Args:
+        data: Data to serialize to JSON
+        limit: Maximum size in bytes
+
+    Returns:
+        JSON string if within limit
+
+    Raises:
+        ResponseTooLargeError: If response exceeds limit
+    """
+    json_str = json.dumps(data, indent=2, ensure_ascii=False)
+    size = len(json_str.encode("utf-8"))
+    if size > limit:
+        raise ResponseTooLargeError(size, limit)
+    return json_str
+
+
+def build_folder_paths(
+    folders: list[dict],
+    id_field: str = "id",
+    parent_field: str = "parent_folder_id",
+    include_root: bool = True,
+) -> list[dict]:
     """Build full paths for folders in a flat list.
 
     Args:
         folders: List of folder dictionaries
         id_field: Name of the ID field
         parent_field: Name of the parent folder ID field
+        include_root: Whether to include synthetic root folder entry
 
     Returns:
         List of folders with 'path' field added
@@ -28,6 +70,18 @@ def build_folder_paths(folders: list[dict], id_field: str = "id", parent_field: 
         return "/" + "/".join(parts)
 
     result = []
+
+    # Add synthetic root folder entry
+    if include_root:
+        result.append({
+            id_field: None,
+            "name": "/",
+            "path": "/",
+            parent_field: None,
+            "is_root": True,
+            "note": "Root folder. Items with folder_id=null are placed here.",
+        })
+
     for folder in folders:
         folder_copy = dict(folder)
         folder_copy["path"] = get_path(folder)
@@ -70,17 +124,24 @@ def build_item_paths(
     return result
 
 
-def search_in_code(items: list[dict], query: str, code_field: str = "code", case_sensitive: bool = False) -> list[dict]:
+def search_in_code(
+    items: list[dict],
+    query: str,
+    code_field: str = "code",
+    case_sensitive: bool = False,
+    include_code: bool = False,
+) -> list[dict]:
     """Search for a pattern in code fields.
 
     Args:
         items: List of items with code field
         query: Search query (substring or regex pattern)
-        code_field: Name of the code field
+        code_field: Name of the code field to search in
         case_sensitive: Whether search should be case-sensitive
+        include_code: Whether to include full 'code' field in results (default: False)
 
     Returns:
-        List of matching items with match info
+        List of matching items with match info (without 'code' field by default)
     """
     results = []
     flags = 0 if case_sensitive else re.IGNORECASE
@@ -98,8 +159,11 @@ def search_in_code(items: list[dict], query: str, code_field: str = "code", case
 
         matches = list(pattern.finditer(code))
         if matches:
-            result = dict(item)
+            # Create result - always exclude 'code' field unless include_code is True
+            # (but keep other fields like 'name' even when searching by name)
+            result = {k: v for k, v in item.items() if k != "code" or include_code}
             result["match_count"] = len(matches)
+            result["matched_in"] = code_field
             result["matches"] = []
             for match in matches[:5]:  # Limit to first 5 matches
                 start = max(0, match.start() - 50)

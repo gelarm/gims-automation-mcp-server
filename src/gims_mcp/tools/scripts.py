@@ -1,10 +1,16 @@
 """MCP Tools for Scripts."""
 
-import json
 from mcp.types import Tool, TextContent
 
 from ..client import GimsClient, GimsApiError
-from ..utils import build_folder_paths, build_item_paths, search_in_code, format_error
+from ..utils import (
+    build_folder_paths,
+    build_item_paths,
+    search_in_code,
+    format_error,
+    check_response_size,
+    ResponseTooLargeError,
+)
 
 
 async def handle_script_tool(name: str, arguments: dict, client: GimsClient) -> list[TextContent] | None:
@@ -24,6 +30,8 @@ async def handle_script_tool(name: str, arguments: dict, client: GimsClient) -> 
         }
         if name in handlers:
             return await handlers[name](client, arguments)
+    except ResponseTooLargeError as e:
+        return [TextContent(type="text", text=f"Error: {str(e)}")]
     except GimsApiError as e:
         return [TextContent(type="text", text=f"Error: {e.message}\nDetail: {e.detail}")]
     except Exception as e:
@@ -139,15 +147,15 @@ def get_script_tools() -> list[Tool]:
         ),
         Tool(
             name="search_scripts",
-            description="Search scripts by code content and/or name",
+            description="Search scripts by name and/or code content. Default searches by name only.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query (substring or regex)"},
                     "search_in": {
                         "type": "string",
-                        "description": "Where to search: 'code', 'name', or 'both' (default: 'both')",
-                        "enum": ["code", "name", "both"],
+                        "description": "Where to search: 'name' (default), 'code', or 'both'",
+                        "enum": ["name", "code", "both"],
                     },
                     "case_sensitive": {"type": "boolean", "description": "Case-sensitive search (default: false)"},
                 },
@@ -162,7 +170,8 @@ def get_script_tools() -> list[Tool]:
 async def _list_script_folders(client: GimsClient, arguments: dict) -> list[TextContent]:
     folders = await client.list_script_folders()
     folders_with_paths = build_folder_paths(folders)
-    return [TextContent(type="text", text=json.dumps({"folders": folders_with_paths}, indent=2, ensure_ascii=False))]
+    response = check_response_size({"folders": folders_with_paths})
+    return [TextContent(type="text", text=response)]
 
 
 async def _create_script_folder(client: GimsClient, arguments: dict) -> list[TextContent]:
@@ -170,7 +179,8 @@ async def _create_script_folder(client: GimsClient, arguments: dict) -> list[Tex
         name=arguments["name"],
         parent_folder_id=arguments.get("parent_folder_id"),
     )
-    return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+    response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
 
 
 async def _update_script_folder(client: GimsClient, arguments: dict) -> list[TextContent]:
@@ -179,7 +189,8 @@ async def _update_script_folder(client: GimsClient, arguments: dict) -> list[Tex
         name=arguments.get("name"),
         parent_folder_id=arguments.get("parent_folder_id"),
     )
-    return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+    response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
 
 
 async def _delete_script_folder(client: GimsClient, arguments: dict) -> list[TextContent]:
@@ -191,13 +202,17 @@ async def _list_scripts(client: GimsClient, arguments: dict) -> list[TextContent
     folders = await client.list_script_folders()
     folders_with_paths = build_folder_paths(folders)
     scripts = await client.list_scripts(folder_id=arguments.get("folder_id"))
-    scripts_with_paths = build_item_paths(scripts, folders_with_paths)
-    return [TextContent(type="text", text=json.dumps({"scripts": scripts_with_paths}, indent=2, ensure_ascii=False))]
+    # Remove code from list results to reduce size
+    scripts_no_code = [{k: v for k, v in s.items() if k != "code"} for s in scripts]
+    scripts_with_paths = build_item_paths(scripts_no_code, folders_with_paths)
+    response = check_response_size({"scripts": scripts_with_paths})
+    return [TextContent(type="text", text=response)]
 
 
 async def _get_script(client: GimsClient, arguments: dict) -> list[TextContent]:
     result = await client.get_script(script_id=arguments["script_id"])
-    return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+    response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
 
 
 async def _create_script(client: GimsClient, arguments: dict) -> list[TextContent]:
@@ -206,7 +221,8 @@ async def _create_script(client: GimsClient, arguments: dict) -> list[TextConten
         code=arguments.get("code", ""),
         folder_id=arguments.get("folder_id"),
     )
-    return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+    response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
 
 
 async def _update_script(client: GimsClient, arguments: dict) -> list[TextContent]:
@@ -216,7 +232,8 @@ async def _update_script(client: GimsClient, arguments: dict) -> list[TextConten
         code=arguments.get("code"),
         folder_id=arguments.get("folder_id"),
     )
-    return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+    response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
 
 
 async def _delete_script(client: GimsClient, arguments: dict) -> list[TextContent]:
@@ -225,32 +242,20 @@ async def _delete_script(client: GimsClient, arguments: dict) -> list[TextConten
 
 
 async def _search_scripts(client: GimsClient, arguments: dict) -> list[TextContent]:
-    """Search scripts by code and/or name.
+    """Search scripts by name and/or code.
 
     Combines:
-    - API search by code (if search_in is 'code' or 'both')
     - Local search by name (if search_in is 'name' or 'both')
+    - API search by code (if search_in is 'code' or 'both')
     """
     query = arguments["query"]
-    search_in = arguments.get("search_in", "both")
+    search_in = arguments.get("search_in", "name")  # Default to name search
     case_sensitive = arguments.get("case_sensitive", False)
 
     results = []
     found_ids = set()
 
-    # Search by code via API
-    if search_in in ("code", "both"):
-        api_results = await client.search_scripts(
-            search_code=query,
-            case_sensitive=case_sensitive,
-        )
-        for r in api_results:
-            if r.get("id") not in found_ids:
-                r["matched_in"] = "code"
-                results.append(r)
-                found_ids.add(r.get("id"))
-
-    # Search by name locally
+    # Search by name locally (default)
     if search_in in ("name", "both"):
         scripts = await client.list_scripts()
         name_results = search_in_code(
@@ -261,8 +266,22 @@ async def _search_scripts(client: GimsClient, arguments: dict) -> list[TextConte
         )
         for r in name_results:
             if r.get("id") not in found_ids:
-                r["matched_in"] = "name"
                 results.append(r)
                 found_ids.add(r.get("id"))
 
-    return [TextContent(type="text", text=json.dumps({"results": results}, indent=2, ensure_ascii=False))]
+    # Search by code via API
+    if search_in in ("code", "both"):
+        api_results = await client.search_scripts(
+            search_code=query,
+            case_sensitive=case_sensitive,
+        )
+        for r in api_results:
+            if r.get("id") not in found_ids:
+                # Remove code from results
+                r_no_code = {k: v for k, v in r.items() if k != "code"}
+                r_no_code["matched_in"] = "code"
+                results.append(r_no_code)
+                found_ids.add(r.get("id"))
+
+    response = check_response_size({"results": results, "count": len(results)})
+    return [TextContent(type="text", text=response)]

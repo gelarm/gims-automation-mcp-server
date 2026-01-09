@@ -43,7 +43,7 @@ class TestGetActivatorTypeTools:
             "create_activator_type_property",
             "update_activator_type_property",
             "delete_activator_type_property",
-            "search_activator_type_code",
+            "search_activator_types",
         }
         assert names == expected
 
@@ -188,8 +188,8 @@ class TestHandleActivatorTypeTool:
         await client.close()
 
     @pytest.mark.asyncio
-    async def test_search_activator_type_code(self, client, mock_api, sample_activator_types):
-        """Test search_activator_type_code tool."""
+    async def test_search_activator_types(self, client, mock_api, sample_activator_types):
+        """Test search_activator_types tool searching by code."""
         full_types = [
             {"id": 1, "name": "ScheduleActivator", "code": "def run(): schedule()"},
             {"id": 2, "name": "TriggerActivator", "code": "def run(): trigger()"},
@@ -205,7 +205,7 @@ class TestHandleActivatorTypeTool:
         )
 
         result = await handle_activator_type_tool(
-            "search_activator_type_code", {"query": "schedule"}, client
+            "search_activator_types", {"query": "schedule", "search_in": "code"}, client
         )
 
         assert result is not None

@@ -51,7 +51,7 @@ class TestGetDatasourceTypeTools:
             "create_method_parameter",
             "update_method_parameter",
             "delete_method_parameter",
-            "search_datasource_type_code",
+            "search_datasource_types",
         }
         assert names == expected
 
@@ -248,8 +248,8 @@ class TestHandleDatasourceTypeTool:
         await client.close()
 
     @pytest.mark.asyncio
-    async def test_search_datasource_type_code(self, client, mock_api, sample_datasource_types):
-        """Test search_datasource_type_code tool."""
+    async def test_search_datasource_types(self, client, mock_api, sample_datasource_types):
+        """Test search_datasource_types tool searching by code."""
         methods = [
             {"id": 1, "name": "connect", "code": "def connect(): pass", "mds_type_id": 1},
             {"id": 2, "name": "query", "code": "def query(sql): return execute(sql)", "mds_type_id": 1},
@@ -258,7 +258,7 @@ class TestHandleDatasourceTypeTool:
         mock_api.get("/datasource_types/method/").mock(return_value=Response(200, json=methods))
 
         result = await handle_datasource_type_tool(
-            "search_datasource_type_code", {"query": "execute"}, client
+            "search_datasource_types", {"query": "execute", "search_in": "code"}, client
         )
 
         assert result is not None

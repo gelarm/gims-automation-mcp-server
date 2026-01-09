@@ -1,16 +1,16 @@
 """MCP Tools for Activator Types."""
 
-import json
 from mcp.types import Tool, TextContent
 
 from ..client import GimsClient, GimsApiError
-from ..utils import build_folder_paths, build_item_paths, search_in_code, format_error
-
-
-def register_activator_type_tools(server, client: GimsClient) -> None:
-    """Register all activator type-related tools with the MCP server."""
-    # Tools are registered via get_activator_type_tools() and handled in server.py
-    pass
+from ..utils import (
+    build_folder_paths,
+    build_item_paths,
+    search_in_code,
+    format_error,
+    check_response_size,
+    ResponseTooLargeError,
+)
 
 
 async def handle_activator_type_tool(name: str, arguments: dict, client: GimsClient) -> list[TextContent] | None:
@@ -30,10 +30,12 @@ async def handle_activator_type_tool(name: str, arguments: dict, client: GimsCli
             "create_activator_type_property": _create_activator_type_property,
             "update_activator_type_property": _update_activator_type_property,
             "delete_activator_type_property": _delete_activator_type_property,
-            "search_activator_type_code": _search_activator_type_code,
+            "search_activator_types": _search_activator_types,
         }
         if name in handlers:
             return await handlers[name](client, arguments)
+    except ResponseTooLargeError as e:
+        return [TextContent(type="text", text=f"Error: {str(e)}")]
     except GimsApiError as e:
         return [TextContent(type="text", text=f"Error: {e.message}\nDetail: {e.detail}")]
     except Exception as e:
@@ -196,13 +198,18 @@ def get_activator_type_tools() -> list[Tool]:
         ),
         # Search
         Tool(
-            name="search_activator_type_code",
-            description="Search for code in activator types",
+            name="search_activator_types",
+            description="Search activator types by name and/or code. Default searches by name only.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query"},
-                    "case_sensitive": {"type": "boolean", "description": "Case-sensitive (default: false)"},
+                    "query": {"type": "string", "description": "Search query (substring or regex)"},
+                    "search_in": {
+                        "type": "string",
+                        "description": "Where to search: 'name' (default), 'code', or 'both'",
+                        "enum": ["name", "code", "both"],
+                    },
+                    "case_sensitive": {"type": "boolean", "description": "Case-sensitive search (default: false)"},
                 },
                 "required": ["query"],
             },
@@ -215,7 +222,8 @@ def get_activator_type_tools() -> list[Tool]:
 async def _list_activator_type_folders(client: GimsClient, arguments: dict) -> list[TextContent]:
     folders = await client.list_activator_type_folders()
     folders_with_paths = build_folder_paths(folders)
-    return [TextContent(type="text", text=json.dumps({"folders": folders_with_paths}, indent=2, ensure_ascii=False))]
+    response = check_response_size({"folders": folders_with_paths})
+    return [TextContent(type="text", text=response)]
 
 
 async def _create_activator_type_folder(client: GimsClient, arguments: dict) -> list[TextContent]:
@@ -223,7 +231,8 @@ async def _create_activator_type_folder(client: GimsClient, arguments: dict) -> 
         name=arguments["name"],
         parent_folder_id=arguments.get("parent_folder_id"),
     )
-    return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+    response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
 
 
 async def _update_activator_type_folder(client: GimsClient, arguments: dict) -> list[TextContent]:
@@ -232,7 +241,8 @@ async def _update_activator_type_folder(client: GimsClient, arguments: dict) -> 
         name=arguments.get("name"),
         parent_folder_id=arguments.get("parent_folder_id"),
     )
-    return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+    response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
 
 
 async def _delete_activator_type_folder(client: GimsClient, arguments: dict) -> list[TextContent]:
@@ -244,8 +254,11 @@ async def _list_activator_types(client: GimsClient, arguments: dict) -> list[Tex
     folders = await client.list_activator_type_folders()
     folders_with_paths = build_folder_paths(folders)
     types = await client.list_activator_types()
-    types_with_paths = build_item_paths(types, folders_with_paths, folder_id_field="folder")
-    return [TextContent(type="text", text=json.dumps({"types": types_with_paths}, indent=2, ensure_ascii=False))]
+    # Remove code from list to reduce size
+    types_no_code = [{k: v for k, v in t.items() if k != "code"} for t in types]
+    types_with_paths = build_item_paths(types_no_code, folders_with_paths, folder_id_field="folder")
+    response = check_response_size({"types": types_with_paths})
+    return [TextContent(type="text", text=response)]
 
 
 async def _get_activator_type(client: GimsClient, arguments: dict) -> list[TextContent]:
@@ -256,7 +269,8 @@ async def _get_activator_type(client: GimsClient, arguments: dict) -> list[TextC
         "type": act_type,
         "properties": properties,
     }
-    return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+    response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
 
 
 async def _create_activator_type(client: GimsClient, arguments: dict) -> list[TextContent]:
@@ -267,13 +281,15 @@ async def _create_activator_type(client: GimsClient, arguments: dict) -> list[Te
         version=arguments.get("version", "1.0"),
         folder_id=arguments.get("folder_id"),
     )
-    return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+    response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
 
 
 async def _update_activator_type(client: GimsClient, arguments: dict) -> list[TextContent]:
     type_id = arguments.pop("type_id")
     result = await client.update_activator_type(type_id, **arguments)
-    return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+    response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
 
 
 async def _delete_activator_type(client: GimsClient, arguments: dict) -> list[TextContent]:
@@ -283,18 +299,21 @@ async def _delete_activator_type(client: GimsClient, arguments: dict) -> list[Te
 
 async def _list_activator_type_properties(client: GimsClient, arguments: dict) -> list[TextContent]:
     properties = await client.list_activator_type_properties(activator_type_id=arguments["activator_type_id"])
-    return [TextContent(type="text", text=json.dumps({"properties": properties}, indent=2, ensure_ascii=False))]
+    response = check_response_size({"properties": properties})
+    return [TextContent(type="text", text=response)]
 
 
 async def _create_activator_type_property(client: GimsClient, arguments: dict) -> list[TextContent]:
     result = await client.create_activator_type_property(**arguments)
-    return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+    response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
 
 
 async def _update_activator_type_property(client: GimsClient, arguments: dict) -> list[TextContent]:
     property_id = arguments.pop("property_id")
     result = await client.update_activator_type_property(property_id, **arguments)
-    return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+    response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
 
 
 async def _delete_activator_type_property(client: GimsClient, arguments: dict) -> list[TextContent]:
@@ -302,20 +321,52 @@ async def _delete_activator_type_property(client: GimsClient, arguments: dict) -
     return [TextContent(type="text", text="Property deleted successfully")]
 
 
-async def _search_activator_type_code(client: GimsClient, arguments: dict) -> list[TextContent]:
-    """Search in activator type code - done locally."""
-    types = await client.list_activator_types()
+async def _search_activator_types(client: GimsClient, arguments: dict) -> list[TextContent]:
+    """Search activator types by name and/or code."""
+    query = arguments["query"]
+    search_in = arguments.get("search_in", "name")  # Default to name search
+    case_sensitive = arguments.get("case_sensitive", False)
 
-    # Get full data with code for each type
-    full_types = []
-    for t in types:
-        full_type = await client.get_activator_type(t["id"])
-        full_types.append(full_type)
+    results = []
+    found_ids = set()
 
-    results = search_in_code(
-        full_types,
-        arguments["query"],
-        code_field="code",
-        case_sensitive=arguments.get("case_sensitive", False),
-    )
-    return [TextContent(type="text", text=json.dumps({"results": results}, indent=2, ensure_ascii=False))]
+    # Search by name (default)
+    if search_in in ("name", "both"):
+        types = await client.list_activator_types()
+        name_results = search_in_code(
+            types,
+            query,
+            code_field="name",
+            case_sensitive=case_sensitive,
+        )
+        for r in name_results:
+            if r.get("id") not in found_ids:
+                # Remove code from results
+                r_no_code = {k: v for k, v in r.items() if k != "code"}
+                results.append(r_no_code)
+                found_ids.add(r.get("id"))
+
+    # Search by code
+    if search_in in ("code", "both"):
+        types = await client.list_activator_types()
+        # Need to get full types with code
+        for t in types:
+            if t["id"] in found_ids:
+                continue
+            full_type = await client.get_activator_type(t["id"])
+            code_results = search_in_code(
+                [full_type],
+                query,
+                code_field="code",
+                case_sensitive=case_sensitive,
+            )
+            if code_results:
+                r = code_results[0]
+                # Remove code from results
+                r_no_code = {k: v for k, v in r.items() if k != "code"}
+                r_no_code["matched_in"] = "code"
+                results.append(r_no_code)
+                found_ids.add(t["id"])
+
+    response = check_response_size({"results": results, "count": len(results)})
+    return [TextContent(type="text", text=response)]

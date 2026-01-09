@@ -2,21 +2,45 @@
 
 import pytest
 
-from gims_mcp.utils import build_folder_paths, build_item_paths, search_in_code
+from gims_mcp.utils import (
+    build_folder_paths,
+    build_item_paths,
+    search_in_code,
+    check_response_size,
+    ResponseTooLargeError,
+    MAX_RESPONSE_SIZE,
+)
 
 
 class TestBuildFolderPaths:
     """Tests for build_folder_paths function."""
 
-    def test_empty_list(self):
-        """Test with empty folder list."""
+    def test_empty_list_with_root(self):
+        """Test with empty folder list (includes synthetic root by default)."""
         result = build_folder_paths([])
+        assert len(result) == 1
+        assert result[0]["is_root"] is True
+        assert result[0]["path"] == "/"
+        assert result[0]["id"] is None
+
+    def test_empty_list_without_root(self):
+        """Test with empty folder list without synthetic root."""
+        result = build_folder_paths([], include_root=False)
         assert result == []
 
     def test_single_root_folder(self):
         """Test with a single root folder."""
         folders = [{"id": 1, "name": "root", "parent_folder_id": None}]
         result = build_folder_paths(folders)
+
+        assert len(result) == 2  # synthetic root + actual folder
+        assert result[0]["is_root"] is True
+        assert result[1]["path"] == "/root"
+
+    def test_single_root_folder_without_root(self):
+        """Test with a single root folder without synthetic root."""
+        folders = [{"id": 1, "name": "root", "parent_folder_id": None}]
+        result = build_folder_paths(folders, include_root=False)
 
         assert len(result) == 1
         assert result[0]["path"] == "/root"
@@ -30,7 +54,9 @@ class TestBuildFolderPaths:
         ]
         result = build_folder_paths(folders)
 
+        assert len(result) == 4  # synthetic root + 3 folders
         paths = {f["id"]: f["path"] for f in result}
+        assert paths[None] == "/"
         assert paths[1] == "/root"
         assert paths[2] == "/root/child"
         assert paths[3] == "/root/child/grandchild"
@@ -43,7 +69,9 @@ class TestBuildFolderPaths:
         ]
         result = build_folder_paths(folders)
 
+        assert len(result) == 3  # synthetic root + 2 folders
         paths = {f["id"]: f["path"] for f in result}
+        assert paths[None] == "/"
         assert paths[1] == "/root1"
         assert paths[2] == "/root2"
 
@@ -150,3 +178,67 @@ class TestSearchInCode:
         assert len(result[0]["matches"]) == 1
         assert "context" in result[0]["matches"][0]
         assert "TARGET" in result[0]["matches"][0]["context"]
+
+    def test_code_excluded_by_default(self):
+        """Test that code field is excluded from results by default."""
+        items = [{"id": 1, "name": "item1", "code": "hello world"}]
+        result = search_in_code(items, "hello")
+
+        assert len(result) == 1
+        assert "code" not in result[0]
+
+    def test_code_included_when_requested(self):
+        """Test that code field is included when include_code=True."""
+        items = [{"id": 1, "name": "item1", "code": "hello world"}]
+        result = search_in_code(items, "hello", include_code=True)
+
+        assert len(result) == 1
+        assert "code" in result[0]
+        assert result[0]["code"] == "hello world"
+
+
+class TestCheckResponseSize:
+    """Tests for check_response_size function."""
+
+    def test_small_response_returns_json(self):
+        """Test that small responses are returned as JSON strings."""
+        data = {"id": 1, "name": "test"}
+        result = check_response_size(data)
+
+        assert isinstance(result, str)
+        assert '"id": 1' in result
+        assert '"name": "test"' in result
+
+    def test_large_response_raises_error(self):
+        """Test that large responses raise ResponseTooLargeError."""
+        # Create data larger than MAX_RESPONSE_SIZE (10KB)
+        large_data = {"data": "x" * 15000}
+
+        with pytest.raises(ResponseTooLargeError) as exc_info:
+            check_response_size(large_data)
+
+        assert exc_info.value.size > MAX_RESPONSE_SIZE
+        assert exc_info.value.limit == MAX_RESPONSE_SIZE
+        assert "Response too large" in str(exc_info.value)
+
+    def test_custom_limit(self):
+        """Test that custom limit is respected."""
+        data = {"data": "x" * 1000}
+
+        # Should pass with default limit
+        result = check_response_size(data)
+        assert isinstance(result, str)
+
+        # Should fail with small custom limit
+        with pytest.raises(ResponseTooLargeError) as exc_info:
+            check_response_size(data, limit=100)
+
+        assert exc_info.value.limit == 100
+
+    def test_unicode_handling(self):
+        """Test that Unicode characters are handled correctly."""
+        data = {"text": "Привет мир 你好世界"}
+        result = check_response_size(data)
+
+        assert "Привет мир" in result
+        assert "你好世界" in result
