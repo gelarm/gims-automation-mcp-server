@@ -75,6 +75,7 @@ pip install -e ".[dev]"
 | Access Token | `--access-token` | `GIMS_ACCESS_TOKEN` | JWT токен доступа |
 | Refresh Token | `--refresh-token` | `GIMS_REFRESH_TOKEN` | JWT токен обновления |
 | Verify SSL | `--verify-ssl` | `GIMS_VERIFY_SSL` | Проверка SSL сертификата (по умолчанию: true) |
+| Max Response Size | `--max-response-size` | `GIMS_MAX_RESPONSE_SIZE_KB` | Лимит размера ответа в КБ (по умолчанию: 10). Примерный пересчёт в токены: 1КБ ≈ 250 токенов (ASCII) или 170 токенов (кириллица) |
 
 ### Получение токенов
 

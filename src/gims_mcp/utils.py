@@ -4,28 +4,46 @@ import json
 import re
 from typing import Any
 
-# Maximum response size in bytes (10KB)
-MAX_RESPONSE_SIZE = 10 * 1024
+# Default maximum response size in bytes (10KB)
+DEFAULT_MAX_RESPONSE_SIZE = 10 * 1024
+
+# Configurable maximum response size (set by server on startup)
+_max_response_size: int = DEFAULT_MAX_RESPONSE_SIZE
+
+
+def set_max_response_size(size_kb: int) -> None:
+    """Set the maximum response size limit.
+
+    Args:
+        size_kb: Maximum size in kilobytes
+    """
+    global _max_response_size
+    _max_response_size = size_kb * 1024
+
+
+def get_max_response_size() -> int:
+    """Get the current maximum response size limit in bytes."""
+    return _max_response_size
 
 
 class ResponseTooLargeError(Exception):
     """Raised when response exceeds maximum allowed size."""
 
-    def __init__(self, size: int, limit: int = MAX_RESPONSE_SIZE):
+    def __init__(self, size: int, limit: int | None = None):
         self.size = size
-        self.limit = limit
+        self.limit = limit if limit is not None else _max_response_size
         super().__init__(
-            f"Response too large ({size // 1024}KB, limit {limit // 1024}KB). "
+            f"Response too large ({size // 1024}KB, limit {self.limit // 1024}KB). "
             "Please refine your query to reduce results."
         )
 
 
-def check_response_size(data: Any, limit: int = MAX_RESPONSE_SIZE) -> str:
+def check_response_size(data: Any, limit: int | None = None) -> str:
     """Check response size and return JSON string if within limit.
 
     Args:
         data: Data to serialize to JSON
-        limit: Maximum size in bytes
+        limit: Maximum size in bytes (uses global setting if not specified)
 
     Returns:
         JSON string if within limit
@@ -33,10 +51,11 @@ def check_response_size(data: Any, limit: int = MAX_RESPONSE_SIZE) -> str:
     Raises:
         ResponseTooLargeError: If response exceeds limit
     """
+    effective_limit = limit if limit is not None else _max_response_size
     json_str = json.dumps(data, indent=2, ensure_ascii=False)
     size = len(json_str.encode("utf-8"))
-    if size > limit:
-        raise ResponseTooLargeError(size, limit)
+    if size > effective_limit:
+        raise ResponseTooLargeError(size, effective_limit)
     return json_str
 
 

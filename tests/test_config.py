@@ -152,3 +152,47 @@ class TestConfigFromEnv:
         monkeypatch.delenv("GIMS_REFRESH_TOKEN", raising=False)
         with pytest.raises(ValueError, match="GIMS_REFRESH_TOKEN"):
             Config.from_env()
+
+
+class TestMaxResponseSizeConfig:
+    """Tests for max_response_size_kb configuration."""
+
+    def test_default_value(self, monkeypatch):
+        """max_response_size_kb defaults to 10."""
+        monkeypatch.delenv("GIMS_MAX_RESPONSE_SIZE_KB", raising=False)
+        config = Config.from_args(
+            url="https://example.com",
+            access_token="test-access-token",
+            refresh_token="test-refresh-token",
+        )
+        assert config.max_response_size_kb == 10
+
+    def test_from_env(self, monkeypatch):
+        """max_response_size_kb from environment variable."""
+        monkeypatch.setenv("GIMS_URL", "https://example.com")
+        monkeypatch.setenv("GIMS_ACCESS_TOKEN", "test-access-token")
+        monkeypatch.setenv("GIMS_REFRESH_TOKEN", "test-refresh-token")
+        monkeypatch.setenv("GIMS_MAX_RESPONSE_SIZE_KB", "20")
+        config = Config.from_env()
+        assert config.max_response_size_kb == 20
+
+    def test_cli_overrides_env(self, monkeypatch):
+        """CLI argument overrides environment variable."""
+        monkeypatch.setenv("GIMS_MAX_RESPONSE_SIZE_KB", "20")
+        config = Config.from_args(
+            url="https://example.com",
+            access_token="test-access-token",
+            refresh_token="test-refresh-token",
+            max_response_size_kb=30,
+        )
+        assert config.max_response_size_kb == 30
+
+    def test_from_args_with_env_fallback(self, monkeypatch):
+        """from_args falls back to env when CLI arg not provided."""
+        monkeypatch.setenv("GIMS_MAX_RESPONSE_SIZE_KB", "15")
+        config = Config.from_args(
+            url="https://example.com",
+            access_token="test-access-token",
+            refresh_token="test-refresh-token",
+        )
+        assert config.max_response_size_kb == 15

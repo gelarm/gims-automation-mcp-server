@@ -8,7 +8,9 @@ from gims_mcp.utils import (
     search_in_code,
     check_response_size,
     ResponseTooLargeError,
-    MAX_RESPONSE_SIZE,
+    DEFAULT_MAX_RESPONSE_SIZE,
+    set_max_response_size,
+    get_max_response_size,
 )
 
 
@@ -211,14 +213,14 @@ class TestCheckResponseSize:
 
     def test_large_response_raises_error(self):
         """Test that large responses raise ResponseTooLargeError."""
-        # Create data larger than MAX_RESPONSE_SIZE (10KB)
+        # Create data larger than DEFAULT_MAX_RESPONSE_SIZE (10KB)
         large_data = {"data": "x" * 15000}
 
         with pytest.raises(ResponseTooLargeError) as exc_info:
             check_response_size(large_data)
 
-        assert exc_info.value.size > MAX_RESPONSE_SIZE
-        assert exc_info.value.limit == MAX_RESPONSE_SIZE
+        assert exc_info.value.size > DEFAULT_MAX_RESPONSE_SIZE
+        assert exc_info.value.limit == DEFAULT_MAX_RESPONSE_SIZE
         assert "Response too large" in str(exc_info.value)
 
     def test_custom_limit(self):
@@ -242,3 +244,33 @@ class TestCheckResponseSize:
 
         assert "Привет мир" in result
         assert "你好世界" in result
+
+    def test_configurable_limit(self):
+        """Test that global limit can be configured."""
+        # Save original limit
+        original_limit = get_max_response_size()
+
+        try:
+            # Set custom limit (20KB)
+            set_max_response_size(20)
+            assert get_max_response_size() == 20 * 1024
+
+            # Data that fits in 20KB but not 10KB
+            data = {"data": "x" * 15000}
+
+            # Should pass with new 20KB limit
+            result = check_response_size(data)
+            assert isinstance(result, str)
+
+            # Reset to smaller limit
+            set_max_response_size(5)
+            assert get_max_response_size() == 5 * 1024
+
+            # Should fail with 5KB limit
+            with pytest.raises(ResponseTooLargeError) as exc_info:
+                check_response_size(data)
+
+            assert exc_info.value.limit == 5 * 1024
+        finally:
+            # Restore original limit
+            set_max_response_size(original_limit // 1024)

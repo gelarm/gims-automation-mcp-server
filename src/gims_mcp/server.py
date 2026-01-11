@@ -12,7 +12,7 @@ from .tools.scripts import get_script_tools, handle_script_tool
 from .tools.datasource_types import get_datasource_type_tools, handle_datasource_type_tool
 from .tools.activator_types import get_activator_type_tools, handle_activator_type_tool
 from .tools.references import get_reference_tools, handle_reference_tool
-from .utils import format_error
+from .utils import format_error, set_max_response_size
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,9 @@ class GimsMcpServer:
 
 async def run_server(config: Config):
     """Run the MCP server with the given configuration."""
+    # Configure response size limit
+    set_max_response_size(config.max_response_size_kb)
+
     server = GimsMcpServer(config)
     try:
         await server.run()

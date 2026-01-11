@@ -27,14 +27,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Environment variables:
-  GIMS_URL            URL of the GIMS server (e.g., https://gims.example.com)
-  GIMS_ACCESS_TOKEN   JWT access token for authentication
-  GIMS_REFRESH_TOKEN  JWT refresh token for automatic token renewal
-  GIMS_VERIFY_SSL     SSL certificate verification (true/false, default: true)
+  GIMS_URL                   URL of the GIMS server (e.g., https://gims.example.com)
+  GIMS_ACCESS_TOKEN          JWT access token for authentication
+  GIMS_REFRESH_TOKEN         JWT refresh token for automatic token renewal
+  GIMS_VERIFY_SSL            SSL certificate verification (true/false, default: true)
+  GIMS_MAX_RESPONSE_SIZE_KB  Maximum response size in KB (default: 10)
 
 Examples:
   gims-mcp-server --url https://gims.example.com --access-token eyJ... --refresh-token eyJ...
   gims-mcp-server --url https://gims.example.com --access-token eyJ... --refresh-token eyJ... --verify-ssl false
+  gims-mcp-server --max-response-size 20  # Increase limit to 20KB (~5000 tokens)
   GIMS_URL=https://gims.example.com GIMS_ACCESS_TOKEN=eyJ... GIMS_REFRESH_TOKEN=eyJ... gims-mcp-server
         """,
     )
@@ -55,6 +57,14 @@ Examples:
         type=_parse_verify_ssl,
         metavar="BOOL",
         help="Verify SSL certificates (true/false, default: true). Use 'false' for self-signed certificates.",
+    )
+    parser.add_argument(
+        "--max-response-size",
+        type=int,
+        metavar="KB",
+        help="Maximum response size in kilobytes (default: 10). "
+             "Approximate token conversion: 1KB ~ 250 tokens (ASCII) or 170 tokens (Cyrillic). "
+             "Example: 10KB ~ 2500 tokens, 20KB ~ 5000 tokens.",
     )
     parser.add_argument(
         "--debug",
@@ -78,6 +88,7 @@ Examples:
             access_token=args.access_token,
             refresh_token=args.refresh_token,
             verify_ssl=args.verify_ssl,
+            max_response_size_kb=args.max_response_size,
         )
     except ValueError as e:
         print(f"Configuration error: {e}", file=sys.stderr)

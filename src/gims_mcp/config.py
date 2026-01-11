@@ -15,6 +15,10 @@ def _parse_bool_env(value: str | None, default: bool = True) -> bool:
     return value.lower() not in ("false", "0", "no", "off")
 
 
+# Default response size limit in KB
+DEFAULT_MAX_RESPONSE_SIZE_KB = 10
+
+
 @dataclass
 class Config:
     """Server configuration."""
@@ -24,6 +28,7 @@ class Config:
     refresh_token: str
     timeout: float = 30.0
     verify_ssl: bool = True
+    max_response_size_kb: int = DEFAULT_MAX_RESPONSE_SIZE_KB
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -32,6 +37,7 @@ class Config:
         access_token = os.environ.get("GIMS_ACCESS_TOKEN", "")
         refresh_token = os.environ.get("GIMS_REFRESH_TOKEN", "")
         verify_ssl = _parse_bool_env(os.environ.get("GIMS_VERIFY_SSL"), default=True)
+        max_response_size_kb = int(os.environ.get("GIMS_MAX_RESPONSE_SIZE_KB", DEFAULT_MAX_RESPONSE_SIZE_KB))
 
         if not url:
             raise ValueError("GIMS_URL environment variable is required")
@@ -40,7 +46,13 @@ class Config:
         if not refresh_token:
             raise ValueError("GIMS_REFRESH_TOKEN environment variable is required")
 
-        return cls(url=url.rstrip("/"), access_token=access_token, refresh_token=refresh_token, verify_ssl=verify_ssl)
+        return cls(
+            url=url.rstrip("/"),
+            access_token=access_token,
+            refresh_token=refresh_token,
+            verify_ssl=verify_ssl,
+            max_response_size_kb=max_response_size_kb,
+        )
 
     @classmethod
     def from_args(
@@ -49,6 +61,7 @@ class Config:
         access_token: str | None = None,
         refresh_token: str | None = None,
         verify_ssl: bool | None = None,
+        max_response_size_kb: int | None = None,
     ) -> "Config":
         """Create config from CLI arguments, falling back to environment variables."""
         final_url = url or os.environ.get("GIMS_URL", "")
@@ -60,6 +73,14 @@ class Config:
             final_verify_ssl = verify_ssl
         else:
             final_verify_ssl = _parse_bool_env(os.environ.get("GIMS_VERIFY_SSL"), default=True)
+
+        # max_response_size_kb: CLI argument takes precedence, then env var, then default
+        if max_response_size_kb is not None:
+            final_max_response_size_kb = max_response_size_kb
+        else:
+            final_max_response_size_kb = int(
+                os.environ.get("GIMS_MAX_RESPONSE_SIZE_KB", DEFAULT_MAX_RESPONSE_SIZE_KB)
+            )
 
         if not final_url:
             raise ValueError("GIMS URL is required (--url or GIMS_URL env)")
@@ -73,4 +94,5 @@ class Config:
             access_token=final_access_token,
             refresh_token=final_refresh_token,
             verify_ssl=final_verify_ssl,
+            max_response_size_kb=final_max_response_size_kb,
         )
