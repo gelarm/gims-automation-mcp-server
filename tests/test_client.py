@@ -257,3 +257,114 @@ class TestGimsClientReferences:
 
         assert result == sample_property_sections
         await client.close()
+
+
+class TestGimsClientResponseFiltering:
+    """Tests for non-JSON response filtering."""
+
+    @pytest.mark.asyncio
+    async def test_html_response_filtered(self, client, mock_api):
+        """Test that HTML error pages are filtered."""
+        html_content = """
+        <!DOCTYPE html>
+        <html>
+        <head><title>502 Bad Gateway</title></head>
+        <body><h1>502 Bad Gateway</h1></body>
+        </html>
+        """
+        mock_api.get("/scripts/folder/").mock(
+            return_value=Response(
+                200,
+                content=html_content.encode(),
+                headers={"content-type": "text/html"},
+            )
+        )
+
+        with pytest.raises(GimsApiError) as exc_info:
+            await client.list_script_folders()
+
+        assert exc_info.value.status_code == 200
+        assert "Invalid response format" in exc_info.value.message
+        assert "text/html" in exc_info.value.detail
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_html_error_page_sanitized(self, client, mock_api):
+        """Test that HTML error pages in 500 responses are sanitized."""
+        html_content = """
+        <!DOCTYPE html>
+        <html>
+        <head><title>500 Internal Server Error</title></head>
+        <body><h1>Internal Server Error</h1><p>Long stack trace here...</p></body>
+        </html>
+        """
+        mock_api.get("/scripts/folder/").mock(
+            return_value=Response(
+                500,
+                content=html_content.encode(),
+                headers={"content-type": "text/html"},
+            )
+        )
+
+        with pytest.raises(GimsApiError) as exc_info:
+            await client.list_script_folders()
+
+        assert exc_info.value.status_code == 500
+        # Should extract title instead of returning full HTML
+        assert "500 Internal Server Error" in exc_info.value.detail
+        assert "<html>" not in exc_info.value.detail
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_plain_text_truncated(self, client, mock_api):
+        """Test that long plain text responses are truncated."""
+        long_text = "x" * 1000
+        mock_api.get("/scripts/folder/").mock(
+            return_value=Response(
+                500,
+                content=long_text.encode(),
+                headers={"content-type": "text/plain"},
+            )
+        )
+
+        with pytest.raises(GimsApiError) as exc_info:
+            await client.list_script_folders()
+
+        assert exc_info.value.status_code == 500
+        # Should be truncated
+        assert "truncated" in exc_info.value.detail
+        assert len(exc_info.value.detail) < 1000
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_json_content_type_with_invalid_json(self, client, mock_api):
+        """Test handling of JSON content-type with invalid JSON body."""
+        mock_api.get("/scripts/folder/").mock(
+            return_value=Response(
+                200,
+                content=b"not valid json",
+                headers={"content-type": "application/json"},
+            )
+        )
+
+        with pytest.raises(GimsApiError) as exc_info:
+            await client.list_script_folders()
+
+        assert "Failed to parse JSON" in exc_info.value.message
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_valid_json_response_works(self, client, mock_api, sample_folders):
+        """Test that valid JSON responses work correctly."""
+        mock_api.get("/scripts/folder/").mock(
+            return_value=Response(
+                200,
+                json=sample_folders,
+                headers={"content-type": "application/json"},
+            )
+        )
+
+        result = await client.list_script_folders()
+
+        assert result == sample_folders
+        await client.close()

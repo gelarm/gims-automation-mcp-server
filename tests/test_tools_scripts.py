@@ -15,7 +15,7 @@ class TestGetScriptTools:
         """Test that get_script_tools returns a list."""
         tools = get_script_tools()
         assert isinstance(tools, list)
-        assert len(tools) == 10
+        assert len(tools) == 11  # Including get_script_code
 
     def test_all_tools_have_required_fields(self):
         """Test that all tools have name, description, and inputSchema."""
@@ -36,6 +36,7 @@ class TestGetScriptTools:
             "delete_script_folder",
             "list_scripts",
             "get_script",
+            "get_script_code",
             "create_script",
             "update_script",
             "delete_script",
@@ -135,7 +136,7 @@ class TestHandleScriptTool:
 
     @pytest.mark.asyncio
     async def test_get_script(self, client, mock_api, sample_scripts):
-        """Test get_script tool."""
+        """Test get_script tool - code should be filtered."""
         mock_api.get("/scripts/script/1/").mock(return_value=Response(200, json=sample_scripts[0]))
 
         result = await handle_script_tool("get_script", {"script_id": 1}, client)
@@ -144,6 +145,23 @@ class TestHandleScriptTool:
         data = json.loads(result[0].text)
         assert data["id"] == 1
         assert data["name"] == "test_script"
+        # Code should be filtered
+        assert data["code"] == "[FILTERED]"
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_script_code(self, client, mock_api, sample_scripts):
+        """Test get_script_code tool - returns full code."""
+        mock_api.get("/scripts/script/1/").mock(return_value=Response(200, json=sample_scripts[0]))
+
+        result = await handle_script_tool("get_script_code", {"script_id": 1}, client)
+
+        assert result is not None
+        data = json.loads(result[0].text)
+        assert data["id"] == 1
+        assert data["name"] == "test_script"
+        # Code should be present
+        assert data["code"] == sample_scripts[0]["code"]
         await client.close()
 
     @pytest.mark.asyncio

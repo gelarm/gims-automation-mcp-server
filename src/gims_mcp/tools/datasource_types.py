@@ -32,6 +32,7 @@ async def handle_datasource_type_tool(name: str, arguments: dict, client: GimsCl
             "delete_datasource_type_property": _delete_datasource_type_property,
             "list_datasource_type_methods": _list_datasource_type_methods,
             "get_datasource_type_method": _get_datasource_type_method,
+            "get_datasource_type_method_code": _get_datasource_type_method_code,
             "create_datasource_type_method": _create_datasource_type_method,
             "update_datasource_type_method": _update_datasource_type_method,
             "delete_datasource_type_method": _delete_datasource_type_method,
@@ -220,7 +221,16 @@ def get_datasource_type_tools() -> list[Tool]:
         ),
         Tool(
             name="get_datasource_type_method",
-            description="Get a single method with its full code and parameters",
+            description="Get method metadata and parameters. Code is filtered - use get_datasource_type_method_code to retrieve code.",
+            inputSchema={
+                "type": "object",
+                "properties": {"method_id": {"type": "integer", "description": "Method ID"}},
+                "required": ["method_id"],
+            },
+        ),
+        Tool(
+            name="get_datasource_type_method_code",
+            description="Get the full code of a datasource type method. Use this when you need to read or analyze the method code.",
             inputSchema={
                 "type": "object",
                 "properties": {"method_id": {"type": "integer", "description": "Method ID"}},
@@ -460,14 +470,32 @@ async def _list_datasource_type_methods(client: GimsClient, arguments: dict) -> 
 
 
 async def _get_datasource_type_method(client: GimsClient, arguments: dict) -> list[TextContent]:
+    """Get method metadata with code filtered."""
     method_id = arguments["method_id"]
     method = await client.get_datasource_type_method(method_id)
     parameters = await client.list_method_parameters(method_id)
+    # Filter code - use get_datasource_type_method_code to retrieve code
+    method_filtered = {k: ("[FILTERED]" if k == "code" else v) for k, v in method.items()}
     result = {
-        "method": method,
+        "method": method_filtered,
         "parameters": parameters,
     }
     response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
+
+
+async def _get_datasource_type_method_code(client: GimsClient, arguments: dict) -> list[TextContent]:
+    """Get method code explicitly."""
+    method_id = arguments["method_id"]
+    method = await client.get_datasource_type_method(method_id)
+    # Return only essential fields with code
+    code_result = {
+        "id": method.get("id"),
+        "name": method.get("name"),
+        "label": method.get("label"),
+        "code": method.get("code", ""),
+    }
+    response = check_response_size(code_result)
     return [TextContent(type="text", text=response)]
 
 

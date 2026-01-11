@@ -23,6 +23,7 @@ async def handle_script_tool(name: str, arguments: dict, client: GimsClient) -> 
             "delete_script_folder": _delete_script_folder,
             "list_scripts": _list_scripts,
             "get_script": _get_script,
+            "get_script_code": _get_script_code,
             "create_script": _create_script,
             "update_script": _update_script,
             "delete_script": _delete_script,
@@ -98,7 +99,18 @@ def get_script_tools() -> list[Tool]:
         ),
         Tool(
             name="get_script",
-            description="Get a script by ID, including its code",
+            description="Get script metadata by ID. Code is filtered by default - use get_script_code to retrieve code.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "script_id": {"type": "integer", "description": "Script ID"},
+                },
+                "required": ["script_id"],
+            },
+        ),
+        Tool(
+            name="get_script_code",
+            description="Get the full code of a script by ID. Use this when you need to read or analyze the script code.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -210,8 +222,24 @@ async def _list_scripts(client: GimsClient, arguments: dict) -> list[TextContent
 
 
 async def _get_script(client: GimsClient, arguments: dict) -> list[TextContent]:
+    """Get script metadata with code filtered."""
     result = await client.get_script(script_id=arguments["script_id"])
-    response = check_response_size(result)
+    # Filter code - use get_script_code to retrieve code
+    result_filtered = {k: ("[FILTERED]" if k == "code" else v) for k, v in result.items()}
+    response = check_response_size(result_filtered)
+    return [TextContent(type="text", text=response)]
+
+
+async def _get_script_code(client: GimsClient, arguments: dict) -> list[TextContent]:
+    """Get script code explicitly."""
+    result = await client.get_script(script_id=arguments["script_id"])
+    # Return only essential fields with code
+    code_result = {
+        "id": result.get("id"),
+        "name": result.get("name"),
+        "code": result.get("code", ""),
+    }
+    response = check_response_size(code_result)
     return [TextContent(type="text", text=response)]
 
 

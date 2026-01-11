@@ -23,6 +23,7 @@ async def handle_activator_type_tool(name: str, arguments: dict, client: GimsCli
             "delete_activator_type_folder": _delete_activator_type_folder,
             "list_activator_types": _list_activator_types,
             "get_activator_type": _get_activator_type,
+            "get_activator_type_code": _get_activator_type_code,
             "create_activator_type": _create_activator_type,
             "update_activator_type": _update_activator_type,
             "delete_activator_type": _delete_activator_type,
@@ -94,12 +95,23 @@ def get_activator_type_tools() -> list[Tool]:
         ),
         Tool(
             name="get_activator_type",
-            description="Get an activator type with its code. Use include_properties=false to get only the type with code (useful when full response is too large)",
+            description="Get activator type metadata. Code is filtered by default - use get_activator_type_code to retrieve code.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "type_id": {"type": "integer", "description": "Type ID"},
                     "include_properties": {"type": "boolean", "description": "Include properties (default: true)"},
+                },
+                "required": ["type_id"],
+            },
+        ),
+        Tool(
+            name="get_activator_type_code",
+            description="Get the full code of an activator type. Use this when you need to read or analyze the activator code.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "type_id": {"type": "integer", "description": "Type ID"},
                 },
                 "required": ["type_id"],
             },
@@ -266,17 +278,34 @@ async def _list_activator_types(client: GimsClient, arguments: dict) -> list[Tex
 
 
 async def _get_activator_type(client: GimsClient, arguments: dict) -> list[TextContent]:
+    """Get activator type metadata with code filtered."""
     type_id = arguments["type_id"]
     include_properties = arguments.get("include_properties", True)
 
     act_type = await client.get_activator_type(type_id)
-    result = {"type": act_type}
+    # Filter code - use get_activator_type_code to retrieve code
+    act_type_filtered = {k: ("[FILTERED]" if k == "code" else v) for k, v in act_type.items()}
+    result = {"type": act_type_filtered}
 
     if include_properties:
         properties = await client.list_activator_type_properties(type_id)
         result["properties"] = properties
 
     response = check_response_size(result)
+    return [TextContent(type="text", text=response)]
+
+
+async def _get_activator_type_code(client: GimsClient, arguments: dict) -> list[TextContent]:
+    """Get activator type code explicitly."""
+    type_id = arguments["type_id"]
+    act_type = await client.get_activator_type(type_id)
+    # Return only essential fields with code
+    code_result = {
+        "id": act_type.get("id"),
+        "name": act_type.get("name"),
+        "code": act_type.get("code", ""),
+    }
+    response = check_response_size(code_result)
     return [TextContent(type="text", text=response)]
 
 

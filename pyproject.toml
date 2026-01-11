@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gims-automation-mcp-server"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server for GIMS Automation - enables coding agents to develop scripts, data source types, and activator types"
 readme = "README.md"
 license = "MIT"

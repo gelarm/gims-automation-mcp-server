@@ -130,6 +130,7 @@ class GimsClient:
         """Handle API response, raising errors if needed.
 
         Note: 401 errors should be handled by the request wrapper, not here.
+        Filters non-JSON responses to prevent garbage in LLM context.
         """
         if response.status_code == 401:
             raise GimsApiError(401, "Authentication failed", "Token may be expired or invalid")
@@ -142,16 +143,54 @@ class GimsClient:
                 data = response.json()
                 detail = data.get("detail", str(data))
             except Exception:
-                detail = response.text
+                detail = self._sanitize_error_response(response)
             raise GimsApiError(response.status_code, "API error", detail)
 
         if response.status_code == 204:
             return None
 
+        # Validate Content-Type to prevent non-JSON garbage in LLM context
+        content_type = response.headers.get("content-type", "")
+        if "application/json" not in content_type:
+            raise GimsApiError(
+                response.status_code,
+                "Invalid response format",
+                f"Expected JSON (application/json), got '{content_type}'. "
+                "Server may have returned an error page. Response body filtered.",
+            )
+
         try:
             return response.json()
-        except Exception:
-            return response.text
+        except Exception as e:
+            raise GimsApiError(
+                response.status_code,
+                "Failed to parse JSON response",
+                f"Content-Type was '{content_type}' but body is not valid JSON: {e}",
+            )
+
+    def _sanitize_error_response(self, response: httpx.Response) -> str:
+        """Sanitize error response to prevent HTML/garbage in LLM context.
+
+        Returns a clean error message instead of raw HTML or large text.
+        """
+        content_type = response.headers.get("content-type", "")
+        text = response.text
+
+        # If it's HTML (error page from Nginx/Django), don't return the full content
+        if "text/html" in content_type or text.strip().startswith(("<!DOCTYPE", "<html", "<HTML")):
+            # Try to extract title from HTML
+            import re
+
+            title_match = re.search(r"<title[^>]*>([^<]+)</title>", text, re.IGNORECASE)
+            if title_match:
+                return f"Server returned HTML error page: {title_match.group(1).strip()}"
+            return "Server returned HTML error page (content filtered)"
+
+        # For other non-JSON responses, truncate if too long
+        if len(text) > 500:
+            return f"{text[:500]}... (truncated, {len(text)} bytes total)"
+
+        return text
 
     async def _request(
         self,

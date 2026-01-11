@@ -15,7 +15,7 @@ class TestGetActivatorTypeTools:
         """Test that get_activator_type_tools returns a list."""
         tools = get_activator_type_tools()
         assert isinstance(tools, list)
-        assert len(tools) == 14
+        assert len(tools) == 15  # Including get_activator_type_code
 
     def test_all_tools_have_required_fields(self):
         """Test that all tools have name, description, and inputSchema."""
@@ -36,6 +36,7 @@ class TestGetActivatorTypeTools:
             "delete_activator_type_folder",
             "list_activator_types",
             "get_activator_type",
+            "get_activator_type_code",
             "create_activator_type",
             "update_activator_type",
             "delete_activator_type",
@@ -108,7 +109,7 @@ class TestHandleActivatorTypeTool:
 
     @pytest.mark.asyncio
     async def test_get_activator_type(self, client, mock_api, sample_activator_types):
-        """Test get_activator_type tool."""
+        """Test get_activator_type tool - code should be filtered."""
         act_type = sample_activator_types[0]
         properties = [{"id": 1, "name": "interval", "label": "interval", "activator_type_id": 1}]
 
@@ -121,6 +122,24 @@ class TestHandleActivatorTypeTool:
         data = json.loads(result[0].text)
         assert "type" in data
         assert "properties" in data
+        # Code should be filtered
+        assert data["type"]["code"] == "[FILTERED]"
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_activator_type_code(self, client, mock_api, sample_activator_types):
+        """Test get_activator_type_code tool - returns full code."""
+        act_type = sample_activator_types[0]
+        mock_api.get("/activator_types/activator_type/1/").mock(return_value=Response(200, json=act_type))
+
+        result = await handle_activator_type_tool("get_activator_type_code", {"type_id": 1}, client)
+
+        assert result is not None
+        data = json.loads(result[0].text)
+        assert data["id"] == 1
+        assert data["name"] == act_type["name"]
+        # Code should be present
+        assert data["code"] == act_type["code"]
         await client.close()
 
     @pytest.mark.asyncio
@@ -139,6 +158,8 @@ class TestHandleActivatorTypeTool:
         data = json.loads(result[0].text)
         assert "type" in data
         assert "properties" not in data
+        # Code should still be filtered
+        assert data["type"]["code"] == "[FILTERED]"
         await client.close()
 
     @pytest.mark.asyncio
