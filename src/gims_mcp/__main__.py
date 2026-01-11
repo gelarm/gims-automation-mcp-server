@@ -27,14 +27,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Environment variables:
-  GIMS_URL         URL of the GIMS server (e.g., https://gims.example.com)
-  GIMS_TOKEN       JWT authentication token
-  GIMS_VERIFY_SSL  SSL certificate verification (true/false, default: true)
+  GIMS_URL            URL of the GIMS server (e.g., https://gims.example.com)
+  GIMS_ACCESS_TOKEN   JWT access token for authentication
+  GIMS_REFRESH_TOKEN  JWT refresh token for automatic token renewal
+  GIMS_VERIFY_SSL     SSL certificate verification (true/false, default: true)
 
 Examples:
-  gims-mcp-server --url https://gims.example.com --token eyJ...
-  gims-mcp-server --url https://gims.example.com --token eyJ... --verify-ssl false
-  GIMS_URL=https://gims.example.com GIMS_TOKEN=eyJ... GIMS_VERIFY_SSL=false gims-mcp-server
+  gims-mcp-server --url https://gims.example.com --access-token eyJ... --refresh-token eyJ...
+  gims-mcp-server --url https://gims.example.com --access-token eyJ... --refresh-token eyJ... --verify-ssl false
+  GIMS_URL=https://gims.example.com GIMS_ACCESS_TOKEN=eyJ... GIMS_REFRESH_TOKEN=eyJ... gims-mcp-server
         """,
     )
     parser.add_argument(
@@ -42,8 +43,12 @@ Examples:
         help="GIMS server URL (or set GIMS_URL env var)",
     )
     parser.add_argument(
-        "--token",
-        help="JWT authentication token (or set GIMS_TOKEN env var)",
+        "--access-token",
+        help="JWT access token (or set GIMS_ACCESS_TOKEN env var)",
+    )
+    parser.add_argument(
+        "--refresh-token",
+        help="JWT refresh token for automatic renewal (or set GIMS_REFRESH_TOKEN env var)",
     )
     parser.add_argument(
         "--verify-ssl",
@@ -68,7 +73,12 @@ Examples:
     )
 
     try:
-        config = Config.from_args(url=args.url, token=args.token, verify_ssl=args.verify_ssl)
+        config = Config.from_args(
+            url=args.url,
+            access_token=args.access_token,
+            refresh_token=args.refresh_token,
+            verify_ssl=args.verify_ssl,
+        )
     except ValueError as e:
         print(f"Configuration error: {e}", file=sys.stderr)
         sys.exit(1)

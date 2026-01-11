@@ -20,7 +20,8 @@ class Config:
     """Server configuration."""
 
     url: str
-    token: str
+    access_token: str
+    refresh_token: str
     timeout: float = 30.0
     verify_ssl: bool = True
 
@@ -28,26 +29,31 @@ class Config:
     def from_env(cls) -> "Config":
         """Create config from environment variables."""
         url = os.environ.get("GIMS_URL", "")
-        token = os.environ.get("GIMS_TOKEN", "")
+        access_token = os.environ.get("GIMS_ACCESS_TOKEN", "")
+        refresh_token = os.environ.get("GIMS_REFRESH_TOKEN", "")
         verify_ssl = _parse_bool_env(os.environ.get("GIMS_VERIFY_SSL"), default=True)
 
         if not url:
             raise ValueError("GIMS_URL environment variable is required")
-        if not token:
-            raise ValueError("GIMS_TOKEN environment variable is required")
+        if not access_token:
+            raise ValueError("GIMS_ACCESS_TOKEN environment variable is required")
+        if not refresh_token:
+            raise ValueError("GIMS_REFRESH_TOKEN environment variable is required")
 
-        return cls(url=url.rstrip("/"), token=token, verify_ssl=verify_ssl)
+        return cls(url=url.rstrip("/"), access_token=access_token, refresh_token=refresh_token, verify_ssl=verify_ssl)
 
     @classmethod
     def from_args(
         cls,
         url: str | None = None,
-        token: str | None = None,
+        access_token: str | None = None,
+        refresh_token: str | None = None,
         verify_ssl: bool | None = None,
     ) -> "Config":
         """Create config from CLI arguments, falling back to environment variables."""
         final_url = url or os.environ.get("GIMS_URL", "")
-        final_token = token or os.environ.get("GIMS_TOKEN", "")
+        final_access_token = access_token or os.environ.get("GIMS_ACCESS_TOKEN", "")
+        final_refresh_token = refresh_token or os.environ.get("GIMS_REFRESH_TOKEN", "")
 
         # verify_ssl: CLI argument takes precedence, then env var, then default True
         if verify_ssl is not None:
@@ -57,7 +63,14 @@ class Config:
 
         if not final_url:
             raise ValueError("GIMS URL is required (--url or GIMS_URL env)")
-        if not final_token:
-            raise ValueError("GIMS token is required (--token or GIMS_TOKEN env)")
+        if not final_access_token:
+            raise ValueError("GIMS access token is required (--access-token or GIMS_ACCESS_TOKEN env)")
+        if not final_refresh_token:
+            raise ValueError("GIMS refresh token is required (--refresh-token or GIMS_REFRESH_TOKEN env)")
 
-        return cls(url=final_url.rstrip("/"), token=final_token, verify_ssl=final_verify_ssl)
+        return cls(
+            url=final_url.rstrip("/"),
+            access_token=final_access_token,
+            refresh_token=final_refresh_token,
+            verify_ssl=final_verify_ssl,
+        )

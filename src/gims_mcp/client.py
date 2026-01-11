@@ -17,12 +17,20 @@ class GimsApiError(Exception):
         super().__init__(f"GIMS API Error ({status_code}): {message}")
 
 
+class GimsAuthError(GimsApiError):
+    """Exception raised when authentication fails and cannot be recovered."""
+
+    pass
+
+
 class GimsClient:
     """Async HTTP client for GIMS Automation API."""
 
     def __init__(self, config: Config):
         self.config = config
         self.base_url = f"{config.url}/automation"
+        self._access_token = config.access_token
+        self._refresh_token = config.refresh_token
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -31,12 +39,27 @@ class GimsClient:
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
                 headers={
-                    "Authorization": f"Bearer {self.config.token}",
+                    "Authorization": f"Bearer {self._access_token}",
                     "Content-Type": "application/json",
                 },
                 timeout=self.config.timeout,
                 verify=self.config.verify_ssl,
             )
+        return self._client
+
+    async def _recreate_client(self) -> httpx.AsyncClient:
+        """Close and recreate HTTP client with updated token."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url,
+            headers={
+                "Authorization": f"Bearer {self._access_token}",
+                "Content-Type": "application/json",
+            },
+            timeout=self.config.timeout,
+            verify=self.config.verify_ssl,
+        )
         return self._client
 
     async def close(self) -> None:
@@ -45,8 +68,69 @@ class GimsClient:
             await self._client.aclose()
             self._client = None
 
+    async def _refresh_access_token(self) -> None:
+        """Refresh the access token using the refresh token.
+
+        Raises:
+            GimsAuthError: If refresh token is expired or invalid.
+            GimsApiError: If token refresh fails for other reasons.
+        """
+        refresh_url = f"{self.config.url}/security/token/refresh/"
+
+        async with httpx.AsyncClient(
+            timeout=self.config.timeout,
+            verify=self.config.verify_ssl,
+        ) as client:
+            try:
+                response = await client.post(
+                    refresh_url,
+                    json={"refresh": self._refresh_token},
+                    headers={"Content-Type": "application/json"},
+                )
+            except httpx.RequestError as e:
+                raise GimsApiError(
+                    0,
+                    "Ошибка аутентификации: не удалось обновить токен доступа",
+                    f"Ошибка сети: {e}",
+                )
+
+            if response.status_code == 401:
+                raise GimsAuthError(
+                    401,
+                    "Ошибка аутентификации: токен обновления недействителен. "
+                    "Проверьте учётную запись и получите новые токены в GIMS.",
+                )
+
+            if response.status_code != 200:
+                try:
+                    data = response.json()
+                    detail = data.get("detail", str(data))
+                except Exception:
+                    detail = response.text
+                raise GimsApiError(
+                    response.status_code,
+                    "Ошибка аутентификации: не удалось обновить токен доступа",
+                    detail,
+                )
+
+            try:
+                data = response.json()
+                self._access_token = data["access"]
+                # refresh token is optional (only returned if ROTATE_REFRESH_TOKENS is True)
+                if "refresh" in data:
+                    self._refresh_token = data["refresh"]
+            except (KeyError, ValueError) as e:
+                raise GimsApiError(
+                    response.status_code,
+                    "Ошибка аутентификации: не удалось обновить токен доступа",
+                    f"Неверный формат ответа: {e}",
+                )
+
     def _handle_response(self, response: httpx.Response) -> Any:
-        """Handle API response, raising errors if needed."""
+        """Handle API response, raising errors if needed.
+
+        Note: 401 errors should be handled by the request wrapper, not here.
+        """
         if response.status_code == 401:
             raise GimsApiError(401, "Authentication failed", "Token may be expired or invalid")
         if response.status_code == 403:
@@ -59,7 +143,7 @@ class GimsClient:
                 detail = data.get("detail", str(data))
             except Exception:
                 detail = response.text
-            raise GimsApiError(response.status_code, f"API error", detail)
+            raise GimsApiError(response.status_code, "API error", detail)
 
         if response.status_code == 204:
             return None
@@ -69,69 +153,90 @@ class GimsClient:
         except Exception:
             return response.text
 
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: dict | None = None,
+        params: dict | None = None,
+    ) -> Any:
+        """Make an HTTP request with automatic token refresh on 401.
+
+        Args:
+            method: HTTP method (GET, POST, PATCH, DELETE).
+            url: URL path (relative to base_url).
+            json: JSON body for POST/PATCH requests.
+            params: Query parameters.
+
+        Returns:
+            Parsed JSON response or None for 204.
+
+        Raises:
+            GimsAuthError: If authentication fails and cannot be recovered.
+            GimsApiError: For other API errors.
+        """
+        client = await self._get_client()
+
+        # First attempt
+        response = await client.request(method, url, json=json, params=params)
+
+        # If 401, try to refresh token and retry
+        if response.status_code == 401:
+            await self._refresh_access_token()
+            client = await self._recreate_client()
+            response = await client.request(method, url, json=json, params=params)
+
+        return self._handle_response(response)
+
     # ==================== Scripts ====================
 
     async def list_script_folders(self) -> list[dict]:
         """Get all script folders."""
-        client = await self._get_client()
-        response = await client.get("/scripts/folder/")
-        return self._handle_response(response)
+        return await self._request("GET", "/scripts/folder/")
 
     async def create_script_folder(self, name: str, parent_folder_id: int | None = None) -> dict:
         """Create a script folder."""
-        client = await self._get_client()
         data = {"name": name}
         if parent_folder_id is not None:
             data["parent_folder_id"] = parent_folder_id
-        response = await client.post("/scripts/folder/", json=data)
-        return self._handle_response(response)
+        return await self._request("POST", "/scripts/folder/", json=data)
 
     async def update_script_folder(self, folder_id: int, name: str | None = None, parent_folder_id: int | None = None) -> dict:
         """Update a script folder."""
-        client = await self._get_client()
         data = {}
         if name is not None:
             data["name"] = name
         if parent_folder_id is not None:
             data["parent_folder_id"] = parent_folder_id
-        response = await client.patch(f"/scripts/folder/{folder_id}/", json=data)
-        return self._handle_response(response)
+        return await self._request("PATCH", f"/scripts/folder/{folder_id}/", json=data)
 
     async def delete_script_folder(self, folder_id: int) -> None:
         """Delete a script folder."""
-        client = await self._get_client()
-        response = await client.delete(f"/scripts/folder/{folder_id}/")
-        return self._handle_response(response)
+        return await self._request("DELETE", f"/scripts/folder/{folder_id}/")
 
     async def list_scripts(self, folder_id: int | None = None) -> list[dict]:
         """Get all scripts, optionally filtered by folder."""
-        client = await self._get_client()
-        response = await client.get("/scripts/script/")
-        scripts = self._handle_response(response)
+        scripts = await self._request("GET", "/scripts/script/")
         if folder_id is not None:
             scripts = [s for s in scripts if s.get("folder_id") == folder_id]
         return scripts
 
     async def get_script(self, script_id: int) -> dict:
         """Get a script by ID."""
-        client = await self._get_client()
-        response = await client.get(f"/scripts/script/{script_id}/")
-        return self._handle_response(response)
+        return await self._request("GET", f"/scripts/script/{script_id}/")
 
     async def create_script(self, name: str, code: str = "", folder_id: int | None = None) -> dict:
         """Create a script."""
-        client = await self._get_client()
         data = {"name": name, "code": code}
         if folder_id is not None:
             data["folder_id"] = folder_id
-        response = await client.post("/scripts/script/", json=data)
-        return self._handle_response(response)
+        return await self._request("POST", "/scripts/script/", json=data)
 
     async def update_script(
         self, script_id: int, name: str | None = None, code: str | None = None, folder_id: int | None = None
     ) -> dict:
         """Update a script."""
-        client = await self._get_client()
         data = {}
         if name is not None:
             data["name"] = name
@@ -139,84 +244,65 @@ class GimsClient:
             data["code"] = code
         if folder_id is not None:
             data["folder_id"] = folder_id
-        response = await client.patch(f"/scripts/script/{script_id}/", json=data)
-        return self._handle_response(response)
+        return await self._request("PATCH", f"/scripts/script/{script_id}/", json=data)
 
     async def delete_script(self, script_id: int) -> None:
         """Delete a script."""
-        client = await self._get_client()
-        response = await client.delete(f"/scripts/script/{script_id}/")
-        return self._handle_response(response)
+        return await self._request("DELETE", f"/scripts/script/{script_id}/")
 
     async def search_scripts(self, search_code: str, case_sensitive: bool = False, exact_match: bool = False) -> list[dict]:
         """Search scripts by code."""
-        client = await self._get_client()
         params = {
             "search_code": search_code,
             "case_sensitive": "true" if case_sensitive else "false",
             "exact_match": "true" if exact_match else "false",
         }
-        response = await client.get("/scripts/search_code/", params=params)
-        return self._handle_response(response)
+        return await self._request("GET", "/scripts/search_code/", params=params)
 
     # ==================== DataSource Type Folders ====================
 
     async def list_datasource_type_folders(self) -> list[dict]:
         """Get all datasource type folders."""
-        client = await self._get_client()
-        response = await client.get("/datasource_types/folder/")
-        return self._handle_response(response)
+        return await self._request("GET", "/datasource_types/folder/")
 
     async def create_datasource_type_folder(self, name: str, parent_folder_id: int | None = None) -> dict:
         """Create a datasource type folder."""
-        client = await self._get_client()
         data = {"name": name}
         if parent_folder_id is not None:
             data["parent_folder_id"] = parent_folder_id
-        response = await client.post("/datasource_types/folder/", json=data)
-        return self._handle_response(response)
+        return await self._request("POST", "/datasource_types/folder/", json=data)
 
     async def update_datasource_type_folder(self, folder_id: int, name: str | None = None, parent_folder_id: int | None = None) -> dict:
         """Update a datasource type folder."""
-        client = await self._get_client()
         data = {}
         if name is not None:
             data["name"] = name
         if parent_folder_id is not None:
             data["parent_folder_id"] = parent_folder_id
-        response = await client.patch(f"/datasource_types/folder/{folder_id}/", json=data)
-        return self._handle_response(response)
+        return await self._request("PATCH", f"/datasource_types/folder/{folder_id}/", json=data)
 
     async def delete_datasource_type_folder(self, folder_id: int) -> None:
         """Delete a datasource type folder."""
-        client = await self._get_client()
-        response = await client.delete(f"/datasource_types/folder/{folder_id}/")
-        return self._handle_response(response)
+        return await self._request("DELETE", f"/datasource_types/folder/{folder_id}/")
 
     # ==================== DataSource Types ====================
 
     async def list_datasource_types(self) -> list[dict]:
         """Get all datasource types."""
-        client = await self._get_client()
-        response = await client.get("/datasource_types/ds_type/")
-        return self._handle_response(response)
+        return await self._request("GET", "/datasource_types/ds_type/")
 
     async def get_datasource_type(self, type_id: int) -> dict:
         """Get a datasource type by ID."""
-        client = await self._get_client()
-        response = await client.get(f"/datasource_types/ds_type/{type_id}/")
-        return self._handle_response(response)
+        return await self._request("GET", f"/datasource_types/ds_type/{type_id}/")
 
     async def create_datasource_type(
         self, name: str, description: str = "", version: str = "1.0", folder_id: int | None = None
     ) -> dict:
         """Create a datasource type."""
-        client = await self._get_client()
         data = {"name": name, "description": description, "version": version}
         if folder_id is not None:
             data["folder"] = folder_id
-        response = await client.post("/datasource_types/ds_type/", json=data)
-        return self._handle_response(response)
+        return await self._request("POST", "/datasource_types/ds_type/", json=data)
 
     async def update_datasource_type(
         self,
@@ -227,7 +313,6 @@ class GimsClient:
         folder_id: int | None = None,
     ) -> dict:
         """Update a datasource type."""
-        client = await self._get_client()
         data = {}
         if name is not None:
             data["name"] = name
@@ -237,22 +322,17 @@ class GimsClient:
             data["version"] = version
         if folder_id is not None:
             data["folder"] = folder_id
-        response = await client.patch(f"/datasource_types/ds_type/{type_id}/", json=data)
-        return self._handle_response(response)
+        return await self._request("PATCH", f"/datasource_types/ds_type/{type_id}/", json=data)
 
     async def delete_datasource_type(self, type_id: int) -> None:
         """Delete a datasource type."""
-        client = await self._get_client()
-        response = await client.delete(f"/datasource_types/ds_type/{type_id}/")
-        return self._handle_response(response)
+        return await self._request("DELETE", f"/datasource_types/ds_type/{type_id}/")
 
     # ==================== DataSource Type Properties ====================
 
     async def list_datasource_type_properties(self, mds_type_id: int) -> list[dict]:
         """Get all properties for a datasource type."""
-        client = await self._get_client()
-        response = await client.get("/datasource_types/properties/", params={"mds_type_id": mds_type_id})
-        return self._handle_response(response)
+        return await self._request("GET", "/datasource_types/properties/", params={"mds_type_id": mds_type_id})
 
     async def create_datasource_type_property(
         self,
@@ -265,9 +345,9 @@ class GimsClient:
         default_value: str = "",
         is_required: bool = False,
         is_hidden: bool = False,
+        default_dict_value_id: int | None = None,
     ) -> dict:
         """Create a datasource type property."""
-        client = await self._get_client()
         data = {
             "mds_type_id": mds_type_id,
             "name": name,
@@ -278,41 +358,32 @@ class GimsClient:
             "default_value": default_value,
             "is_required": is_required,
             "is_hidden": is_hidden,
+            "default_dict_value_id": default_dict_value_id,
         }
-        response = await client.post("/datasource_types/properties/", json=data)
-        return self._handle_response(response)
+        return await self._request("POST", "/datasource_types/properties/", json=data)
 
     async def update_datasource_type_property(self, property_id: int, **kwargs) -> dict:
         """Update a datasource type property."""
-        client = await self._get_client()
-        response = await client.patch(f"/datasource_types/properties/{property_id}/", json=kwargs)
-        return self._handle_response(response)
+        return await self._request("PATCH", f"/datasource_types/properties/{property_id}/", json=kwargs)
 
     async def delete_datasource_type_property(self, property_id: int) -> None:
         """Delete a datasource type property."""
-        client = await self._get_client()
-        response = await client.delete(f"/datasource_types/properties/{property_id}/")
-        return self._handle_response(response)
+        return await self._request("DELETE", f"/datasource_types/properties/{property_id}/")
 
     # ==================== DataSource Type Methods ====================
 
     async def list_datasource_type_methods(self, mds_type_id: int) -> list[dict]:
         """Get all methods for a datasource type."""
-        client = await self._get_client()
-        response = await client.get("/datasource_types/method/", params={"mds_type_id": mds_type_id})
-        return self._handle_response(response)
+        return await self._request("GET", "/datasource_types/method/", params={"mds_type_id": mds_type_id})
 
     async def get_datasource_type_method(self, method_id: int) -> dict:
         """Get a single datasource type method by ID."""
-        client = await self._get_client()
-        response = await client.get(f"/datasource_types/method/{method_id}/")
-        return self._handle_response(response)
+        return await self._request("GET", f"/datasource_types/method/{method_id}/")
 
     async def create_datasource_type_method(
         self, mds_type_id: int, name: str, label: str, code: str = "# Method code\npass", description: str = ""
     ) -> dict:
         """Create a datasource type method."""
-        client = await self._get_client()
         data = {
             "mds_type_id": mds_type_id,
             "name": name,
@@ -320,28 +391,21 @@ class GimsClient:
             "code": code,
             "description": description,
         }
-        response = await client.post("/datasource_types/method/", json=data)
-        return self._handle_response(response)
+        return await self._request("POST", "/datasource_types/method/", json=data)
 
     async def update_datasource_type_method(self, method_id: int, **kwargs) -> dict:
         """Update a datasource type method."""
-        client = await self._get_client()
-        response = await client.patch(f"/datasource_types/method/{method_id}/", json=kwargs)
-        return self._handle_response(response)
+        return await self._request("PATCH", f"/datasource_types/method/{method_id}/", json=kwargs)
 
     async def delete_datasource_type_method(self, method_id: int) -> None:
         """Delete a datasource type method."""
-        client = await self._get_client()
-        response = await client.delete(f"/datasource_types/method/{method_id}/")
-        return self._handle_response(response)
+        return await self._request("DELETE", f"/datasource_types/method/{method_id}/")
 
     # ==================== Method Parameters ====================
 
     async def list_method_parameters(self, method_id: int) -> list[dict]:
         """Get all parameters for a method."""
-        client = await self._get_client()
-        response = await client.get("/datasource_types/method_params/", params={"method_id": method_id})
-        return self._handle_response(response)
+        return await self._request("GET", "/datasource_types/method_params/", params={"method_id": method_id})
 
     async def create_method_parameter(
         self,
@@ -352,9 +416,9 @@ class GimsClient:
         default_value: str = "",
         description: str = "",
         is_hidden: bool = False,
+        default_dict_value_id: int | None = None,
     ) -> dict:
         """Create a method parameter."""
-        client = await self._get_client()
         data = {
             "method_id": method_id,
             "label": label,
@@ -363,69 +427,53 @@ class GimsClient:
             "default_value": default_value,
             "description": description,
             "is_hidden": is_hidden,
+            "default_dict_value_id": default_dict_value_id,
         }
-        response = await client.post("/datasource_types/method_params/", json=data)
-        return self._handle_response(response)
+        return await self._request("POST", "/datasource_types/method_params/", json=data)
 
     async def update_method_parameter(self, parameter_id: int, **kwargs) -> dict:
         """Update a method parameter."""
-        client = await self._get_client()
-        response = await client.patch(f"/datasource_types/method_params/{parameter_id}/", json=kwargs)
-        return self._handle_response(response)
+        return await self._request("PATCH", f"/datasource_types/method_params/{parameter_id}/", json=kwargs)
 
     async def delete_method_parameter(self, parameter_id: int) -> None:
         """Delete a method parameter."""
-        client = await self._get_client()
-        response = await client.delete(f"/datasource_types/method_params/{parameter_id}/")
-        return self._handle_response(response)
+        return await self._request("DELETE", f"/datasource_types/method_params/{parameter_id}/")
 
     # ==================== Activator Type Folders ====================
 
     async def list_activator_type_folders(self) -> list[dict]:
         """Get all activator type folders."""
-        client = await self._get_client()
-        response = await client.get("/activator_type/folder/")
-        return self._handle_response(response)
+        return await self._request("GET", "/activator_type/folder/")
 
     async def create_activator_type_folder(self, name: str, parent_folder_id: int | None = None) -> dict:
         """Create an activator type folder."""
-        client = await self._get_client()
         data = {"name": name}
         if parent_folder_id is not None:
             data["parent_folder_id"] = parent_folder_id
-        response = await client.post("/activator_type/folder/", json=data)
-        return self._handle_response(response)
+        return await self._request("POST", "/activator_type/folder/", json=data)
 
     async def update_activator_type_folder(self, folder_id: int, name: str | None = None, parent_folder_id: int | None = None) -> dict:
         """Update an activator type folder."""
-        client = await self._get_client()
         data = {}
         if name is not None:
             data["name"] = name
         if parent_folder_id is not None:
             data["parent_folder_id"] = parent_folder_id
-        response = await client.patch(f"/activator_type/folder/{folder_id}/", json=data)
-        return self._handle_response(response)
+        return await self._request("PATCH", f"/activator_type/folder/{folder_id}/", json=data)
 
     async def delete_activator_type_folder(self, folder_id: int) -> None:
         """Delete an activator type folder."""
-        client = await self._get_client()
-        response = await client.delete(f"/activator_type/folder/{folder_id}/")
-        return self._handle_response(response)
+        return await self._request("DELETE", f"/activator_type/folder/{folder_id}/")
 
     # ==================== Activator Types ====================
 
     async def list_activator_types(self) -> list[dict]:
         """Get all activator types."""
-        client = await self._get_client()
-        response = await client.get("/activator_types/activator_type/")
-        return self._handle_response(response)
+        return await self._request("GET", "/activator_types/activator_type/")
 
     async def get_activator_type(self, type_id: int) -> dict:
         """Get an activator type by ID."""
-        client = await self._get_client()
-        response = await client.get(f"/activator_types/activator_type/{type_id}/")
-        return self._handle_response(response)
+        return await self._request("GET", f"/activator_types/activator_type/{type_id}/")
 
     async def create_activator_type(
         self,
@@ -436,32 +484,24 @@ class GimsClient:
         folder_id: int | None = None,
     ) -> dict:
         """Create an activator type."""
-        client = await self._get_client()
         data = {"name": name, "code": code, "description": description, "version": version}
         if folder_id is not None:
             data["folder"] = folder_id
-        response = await client.post("/activator_types/activator_type/", json=data)
-        return self._handle_response(response)
+        return await self._request("POST", "/activator_types/activator_type/", json=data)
 
     async def update_activator_type(self, type_id: int, **kwargs) -> dict:
         """Update an activator type."""
-        client = await self._get_client()
-        response = await client.patch(f"/activator_types/activator_type/{type_id}/", json=kwargs)
-        return self._handle_response(response)
+        return await self._request("PATCH", f"/activator_types/activator_type/{type_id}/", json=kwargs)
 
     async def delete_activator_type(self, type_id: int) -> None:
         """Delete an activator type."""
-        client = await self._get_client()
-        response = await client.delete(f"/activator_types/activator_type/{type_id}/")
-        return self._handle_response(response)
+        return await self._request("DELETE", f"/activator_types/activator_type/{type_id}/")
 
     # ==================== Activator Type Properties ====================
 
     async def list_activator_type_properties(self, activator_type_id: int | None = None) -> list[dict]:
         """Get all activator type properties."""
-        client = await self._get_client()
-        response = await client.get("/activator_types/properties/")
-        properties = self._handle_response(response)
+        properties = await self._request("GET", "/activator_types/properties/")
         if activator_type_id is not None:
             properties = [p for p in properties if p.get("activator_type_id") == activator_type_id]
         return properties
@@ -477,9 +517,9 @@ class GimsClient:
         default_value: str = "",
         is_required: bool = False,
         is_hidden: bool = False,
+        default_dict_value_id: int | None = None,
     ) -> dict:
         """Create an activator type property."""
-        client = await self._get_client()
         data = {
             "activator_type_id": activator_type_id,
             "name": name,
@@ -490,32 +530,24 @@ class GimsClient:
             "default_value": default_value,
             "is_required": is_required,
             "is_hidden": is_hidden,
+            "default_dict_value_id": default_dict_value_id,
         }
-        response = await client.post("/activator_types/properties/", json=data)
-        return self._handle_response(response)
+        return await self._request("POST", "/activator_types/properties/", json=data)
 
     async def update_activator_type_property(self, property_id: int, **kwargs) -> dict:
         """Update an activator type property."""
-        client = await self._get_client()
-        response = await client.patch(f"/activator_types/properties/{property_id}/", json=kwargs)
-        return self._handle_response(response)
+        return await self._request("PATCH", f"/activator_types/properties/{property_id}/", json=kwargs)
 
     async def delete_activator_type_property(self, property_id: int) -> None:
         """Delete an activator type property."""
-        client = await self._get_client()
-        response = await client.delete(f"/activator_types/properties/{property_id}/")
-        return self._handle_response(response)
+        return await self._request("DELETE", f"/activator_types/properties/{property_id}/")
 
     # ==================== References ====================
 
     async def list_value_types(self) -> list[dict]:
         """Get all value types."""
-        client = await self._get_client()
-        response = await client.get("/rest/value_types/")
-        return self._handle_response(response)
+        return await self._request("GET", "/rest/value_types/")
 
     async def list_property_sections(self) -> list[dict]:
         """Get all property sections."""
-        client = await self._get_client()
-        response = await client.get("/rest/property_sections/")
-        return self._handle_response(response)
+        return await self._request("GET", "/rest/property_sections/")

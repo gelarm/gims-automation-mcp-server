@@ -4,7 +4,7 @@ import pytest
 import respx
 from httpx import Response
 
-from gims_mcp.client import GimsClient, GimsApiError
+from gims_mcp.client import GimsClient, GimsApiError, GimsAuthError
 
 
 class TestGimsClientScripts:
@@ -106,20 +106,97 @@ class TestGimsClientScripts:
         await client.close()
 
 
-class TestGimsClientErrors:
-    """Tests for error handling."""
+class TestGimsClientTokenRefresh:
+    """Tests for token refresh functionality."""
 
     @pytest.mark.asyncio
-    async def test_authentication_error(self, client, mock_api):
-        """Test handling of 401 errors."""
-        mock_api.get("/scripts/folder/").mock(return_value=Response(401, json={"detail": "Invalid token"}))
+    async def test_token_refresh_on_401(self, client, mock_api, sample_folders):
+        """Test automatic token refresh on 401 response."""
+        # First call returns 401
+        mock_api.get("/scripts/folder/").mock(
+            side_effect=[
+                Response(401, json={"detail": "Token expired"}),
+                Response(200, json=sample_folders),
+            ]
+        )
 
-        with pytest.raises(GimsApiError) as exc_info:
-            await client.list_script_folders()
+        # Mock the refresh endpoint (outside of mock_api context)
+        # Note: refresh token is optional in response (depends on ROTATE_REFRESH_TOKENS setting)
+        with respx.mock(base_url="https://gims.test.local/security") as security_mock:
+            security_mock.post("/token/refresh/").mock(
+                return_value=Response(200, json={
+                    "access": "new-access-token",
+                })
+            )
 
-        assert exc_info.value.status_code == 401
-        assert "Authentication failed" in exc_info.value.message
+            result = await client.list_script_folders()
+
+        assert result == sample_folders
+        assert client._access_token == "new-access-token"
+        # refresh_token stays the same when not rotated
+        assert client._refresh_token == "test-refresh-token"
         await client.close()
+
+    @pytest.mark.asyncio
+    async def test_token_refresh_with_rotation(self, client, mock_api, sample_folders):
+        """Test token refresh when ROTATE_REFRESH_TOKENS is enabled."""
+        mock_api.get("/scripts/folder/").mock(
+            side_effect=[
+                Response(401, json={"detail": "Token expired"}),
+                Response(200, json=sample_folders),
+            ]
+        )
+
+        with respx.mock(base_url="https://gims.test.local/security") as security_mock:
+            security_mock.post("/token/refresh/").mock(
+                return_value=Response(200, json={
+                    "access": "new-access-token",
+                    "refresh": "new-refresh-token",
+                })
+            )
+
+            result = await client.list_script_folders()
+
+        assert result == sample_folders
+        assert client._access_token == "new-access-token"
+        assert client._refresh_token == "new-refresh-token"
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_expired_raises_auth_error(self, client, mock_api):
+        """Test that expired refresh token raises GimsAuthError."""
+        mock_api.get("/scripts/folder/").mock(return_value=Response(401, json={"detail": "Token expired"}))
+
+        with respx.mock(base_url="https://gims.test.local/security") as security_mock:
+            security_mock.post("/token/refresh/").mock(
+                return_value=Response(401, json={"detail": "Refresh token expired"})
+            )
+
+            with pytest.raises(GimsAuthError) as exc_info:
+                await client.list_script_folders()
+
+        assert "токен обновления недействителен" in exc_info.value.message
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_server_error(self, client, mock_api):
+        """Test that server error during refresh raises GimsApiError."""
+        mock_api.get("/scripts/folder/").mock(return_value=Response(401, json={"detail": "Token expired"}))
+
+        with respx.mock(base_url="https://gims.test.local/security") as security_mock:
+            security_mock.post("/token/refresh/").mock(
+                return_value=Response(500, json={"detail": "Internal server error"})
+            )
+
+            with pytest.raises(GimsApiError) as exc_info:
+                await client.list_script_folders()
+
+        assert "не удалось обновить токен доступа" in exc_info.value.message
+        await client.close()
+
+
+class TestGimsClientErrors:
+    """Tests for error handling."""
 
     @pytest.mark.asyncio
     async def test_permission_error(self, client, mock_api):

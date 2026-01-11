@@ -11,7 +11,11 @@ from gims_mcp.client import GimsClient
 @pytest.fixture
 def config():
     """Create a test configuration."""
-    return Config(url="https://gims.test.local", token="test-jwt-token")
+    return Config(
+        url="https://gims.test.local",
+        access_token="test-access-token",
+        refresh_token="test-refresh-token",
+    )
 
 
 @pytest.fixture
