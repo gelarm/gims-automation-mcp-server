@@ -12,6 +12,7 @@ from .tools.scripts import get_script_tools, handle_script_tool
 from .tools.datasource_types import get_datasource_type_tools, handle_datasource_type_tool
 from .tools.activator_types import get_activator_type_tools, handle_activator_type_tool
 from .tools.references import get_reference_tools, handle_reference_tool
+from .tools.logs import get_log_tools, handle_log_tool
 from .utils import format_error, set_max_response_size
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ class GimsMcpServer:
             tools.extend(get_datasource_type_tools())
             tools.extend(get_activator_type_tools())
             tools.extend(get_reference_tools())
+            tools.extend(get_log_tools())
             return tools
 
         @self.server.call_tool()
@@ -60,6 +62,11 @@ class GimsMcpServer:
 
                 # Try reference tools
                 result = await handle_reference_tool(name, arguments, self.client)
+                if result is not None:
+                    return result
+
+                # Try log tools
+                result = await handle_log_tool(name, arguments, self.client)
                 if result is not None:
                     return result
 

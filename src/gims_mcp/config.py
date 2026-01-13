@@ -18,6 +18,9 @@ def _parse_bool_env(value: str | None, default: bool = True) -> bool:
 # Default response size limit in KB
 DEFAULT_MAX_RESPONSE_SIZE_KB = 10
 
+# Default log stream timeout in seconds
+DEFAULT_LOG_STREAM_TIMEOUT = 60
+
 
 @dataclass
 class Config:
@@ -29,6 +32,7 @@ class Config:
     timeout: float = 30.0
     verify_ssl: bool = True
     max_response_size_kb: int = DEFAULT_MAX_RESPONSE_SIZE_KB
+    log_stream_timeout: int = DEFAULT_LOG_STREAM_TIMEOUT
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -38,6 +42,7 @@ class Config:
         refresh_token = os.environ.get("GIMS_REFRESH_TOKEN", "")
         verify_ssl = _parse_bool_env(os.environ.get("GIMS_VERIFY_SSL"), default=True)
         max_response_size_kb = int(os.environ.get("GIMS_MAX_RESPONSE_SIZE_KB", DEFAULT_MAX_RESPONSE_SIZE_KB))
+        log_stream_timeout = int(os.environ.get("GIMS_LOG_STREAM_TIMEOUT", DEFAULT_LOG_STREAM_TIMEOUT))
 
         if not url:
             raise ValueError("GIMS_URL environment variable is required")
@@ -52,6 +57,7 @@ class Config:
             refresh_token=refresh_token,
             verify_ssl=verify_ssl,
             max_response_size_kb=max_response_size_kb,
+            log_stream_timeout=log_stream_timeout,
         )
 
     @classmethod
@@ -62,6 +68,7 @@ class Config:
         refresh_token: str | None = None,
         verify_ssl: bool | None = None,
         max_response_size_kb: int | None = None,
+        log_stream_timeout: int | None = None,
     ) -> "Config":
         """Create config from CLI arguments, falling back to environment variables."""
         final_url = url or os.environ.get("GIMS_URL", "")
@@ -82,6 +89,14 @@ class Config:
                 os.environ.get("GIMS_MAX_RESPONSE_SIZE_KB", DEFAULT_MAX_RESPONSE_SIZE_KB)
             )
 
+        # log_stream_timeout: CLI argument takes precedence, then env var, then default
+        if log_stream_timeout is not None:
+            final_log_stream_timeout = log_stream_timeout
+        else:
+            final_log_stream_timeout = int(
+                os.environ.get("GIMS_LOG_STREAM_TIMEOUT", DEFAULT_LOG_STREAM_TIMEOUT)
+            )
+
         if not final_url:
             raise ValueError("GIMS URL is required (--url or GIMS_URL env)")
         if not final_access_token:
@@ -95,4 +110,5 @@ class Config:
             refresh_token=final_refresh_token,
             verify_ssl=final_verify_ssl,
             max_response_size_kb=final_max_response_size_kb,
+            log_stream_timeout=final_log_stream_timeout,
         )

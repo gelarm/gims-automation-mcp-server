@@ -1,5 +1,6 @@
 """HTTP client for GIMS Automation API."""
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -590,3 +591,88 @@ class GimsClient:
     async def list_property_sections(self) -> list[dict]:
         """Get all property sections."""
         return await self._request("GET", "/rest/property_sections/")
+
+    # ==================== Script Logs ====================
+
+    async def get_script_log_url(self, script_id: int) -> str:
+        """Get the SSE stream URL for a script's log.
+
+        Args:
+            script_id: The script ID.
+
+        Returns:
+            The full URL for the SSE log stream.
+
+        Raises:
+            GimsApiError: If script not found (404) or other API error.
+        """
+        result = await self._request("GET", f"/scripts/script_log_url/{script_id}/")
+        # API returns {"url": ["<log_url>"]}
+        urls = result.get("url", [])
+        if not urls:
+            raise GimsApiError(500, "Invalid response", "No log URL returned")
+        return urls[0]
+
+    async def stream_sse(
+        self,
+        url: str,
+        timeout: float,
+    ) -> AsyncIterator[str]:
+        """Stream SSE events from a URL.
+
+        Args:
+            url: The SSE stream URL.
+            timeout: Total timeout in seconds.
+
+        Yields:
+            JSON content strings from SSE data events.
+
+        Raises:
+            GimsApiError: On connection or streaming errors.
+        """
+        headers = {
+            "Authorization": f"Bearer {self._access_token}",
+            "Accept": "text/event-stream",
+        }
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout, connect=10.0),
+                verify=self.config.verify_ssl,
+            ) as client:
+                async with client.stream("GET", url, headers=headers) as response:
+                    if response.status_code == 401:
+                        # Try to refresh token
+                        await self._refresh_access_token()
+                        headers["Authorization"] = f"Bearer {self._access_token}"
+                        # Retry with new token - need new client context
+                        async with httpx.AsyncClient(
+                            timeout=httpx.Timeout(timeout, connect=10.0),
+                            verify=self.config.verify_ssl,
+                        ) as retry_client:
+                            async with retry_client.stream("GET", url, headers=headers) as retry_response:
+                                if retry_response.status_code != 200:
+                                    raise GimsApiError(
+                                        retry_response.status_code,
+                                        "Failed to connect to log stream after token refresh",
+                                    )
+                                async for line in retry_response.aiter_lines():
+                                    if line.startswith("data:"):
+                                        yield line[5:]  # Remove "data:" prefix
+                        return
+
+                    if response.status_code != 200:
+                        raise GimsApiError(
+                            response.status_code,
+                            "Failed to connect to log stream",
+                            f"HTTP {response.status_code}",
+                        )
+
+                    async for line in response.aiter_lines():
+                        if line.startswith("data:"):
+                            yield line[5:]  # Remove "data:" prefix
+        except httpx.TimeoutException:
+            # Timeout is expected - don't raise, just stop yielding
+            return
+        except httpx.RequestError as e:
+            raise GimsApiError(0, "SSE connection error", str(e)) from e

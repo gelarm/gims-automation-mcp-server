@@ -76,6 +76,7 @@ pip install -e ".[dev]"
 | Refresh Token | `--refresh-token` | `GIMS_REFRESH_TOKEN` | JWT токен обновления |
 | Verify SSL | `--verify-ssl` | `GIMS_VERIFY_SSL` | Проверка SSL сертификата (по умолчанию: true) |
 | Max Response Size | `--max-response-size` | `GIMS_MAX_RESPONSE_SIZE_KB` | Лимит размера ответа в КБ (по умолчанию: 10). Примерный пересчёт в токены: 1КБ ≈ 250 токенов (ASCII) или 170 токенов (кириллица) |
+| Log Stream Timeout | `--log-stream-timeout` | `GIMS_LOG_STREAM_TIMEOUT` | Таймаут для SSE-потока логов в секундах (по умолчанию: 60) |
 
 ### Получение токенов
 
@@ -92,9 +93,9 @@ MCP сервер автоматически обновляет access token пр
 Ошибка аутентификации: токен обновления недействителен. Проверьте учётную запись и получите новые токены в GIMS.
 ```
 
-## Доступные Tools (48)
+## Доступные Tools (49)
 
-### Scripts (10 tools)
+### Scripts (11 tools)
 
 | Tool | Описание |
 |------|----------|
@@ -108,6 +109,7 @@ MCP сервер автоматически обновляет access token пр
 | `update_script` | Обновить скрипт |
 | `delete_script` | Удалить скрипт |
 | `search_scripts` | Поиск по коду и/или имени |
+| `get_script_execution_log` | Получить лог выполнения скрипта через SSE-поток. Ожидает маркер завершения или таймаут. Параметры: `scr_id` (обязательный) — ID скрипта; `timeout` (опционально) — таймаут в секундах; `end_markers` (опционально) — маркеры завершения (по умолчанию: ['END SCRIPT']); `filter_pattern` (опционально) — regex для фильтрации строк; `keep_timestamp` (опционально) — сохранять timestamp и уровень лога (по умолчанию: false) |
 
 ### DataSource Types (22 tools)
 
