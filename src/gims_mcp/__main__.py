@@ -32,6 +32,7 @@ Environment variables:
   GIMS_REFRESH_TOKEN         JWT refresh token for automatic token renewal
   GIMS_VERIFY_SSL            SSL certificate verification (true/false, default: true)
   GIMS_MAX_RESPONSE_SIZE_KB  Maximum response size in KB (default: 10)
+  GIMS_LOG_STREAM_TIMEOUT    Log stream timeout in seconds (default: 60)
 
 Examples:
   gims-mcp-server --url https://gims.example.com --access-token eyJ... --refresh-token eyJ...
@@ -67,6 +68,13 @@ Examples:
              "Example: 10KB ~ 2500 tokens, 20KB ~ 5000 tokens.",
     )
     parser.add_argument(
+        "--log-stream-timeout",
+        type=int,
+        metavar="SECONDS",
+        help="Log stream timeout in seconds (default: 60). "
+             "Maximum time to wait for script execution log via SSE.",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug logging",
@@ -89,6 +97,7 @@ Examples:
             refresh_token=args.refresh_token,
             verify_ssl=args.verify_ssl,
             max_response_size_kb=args.max_response_size,
+            log_stream_timeout=args.log_stream_timeout,
         )
     except ValueError as e:
         print(f"Configuration error: {e}", file=sys.stderr)
