@@ -405,10 +405,14 @@ async def _get_datasource_type(client: GimsClient, arguments: dict) -> list[Text
 
     if include_methods:
         methods = await client.list_datasource_type_methods(type_id)
-        # Get parameters for each method
+        # Filter code from methods to reduce response size
+        # Use get_datasource_type_method_code to retrieve code
+        methods_filtered = []
         for method in methods:
-            method["parameters"] = await client.list_method_parameters(method["id"])
-        result["methods"] = methods
+            method_filtered = {k: ("[FILTERED]" if k == "code" else v) for k, v in method.items()}
+            method_filtered["parameters"] = await client.list_method_parameters(method["id"])
+            methods_filtered.append(method_filtered)
+        result["methods"] = methods_filtered
 
     response = check_response_size(result)
     return [TextContent(type="text", text=response)]
