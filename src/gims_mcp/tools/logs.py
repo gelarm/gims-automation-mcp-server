@@ -159,7 +159,9 @@ async def _get_script_execution_log(
             return [TextContent(type="text", text=f"Error 404: Script with ID {scr_id} not found")]
         raise
 
-    # Add tail=0 to start from beginning
+    # Add tail=0 to stream only NEW entries (start from end of file).
+    # tail=N means "show last N lines" - so tail=0 means "show 0 historical lines".
+    # Without this parameter, logviewer defaults to tail=10 (last 10 lines).
     if "?" in log_url:
         log_url += "&tail=0"
     else:
@@ -174,67 +176,120 @@ async def _get_script_execution_log(
     connection_error: str | None = None
 
     start_time = time.monotonic()
+    retry_delay = 2.0  # seconds between reconnection attempts
+    max_retries = int(timeout / retry_delay) + 1  # Allow retries until timeout
 
-    try:
-        async for data in client.stream_sse(log_url, timeout):
-            # Check timeout
-            if time.monotonic() - start_time >= timeout:
-                timeout_reached = True
-                break
+    for _ in range(max_retries):
+        # Check if overall timeout reached
+        elapsed = time.monotonic() - start_time
+        if elapsed >= timeout:
+            timeout_reached = True
+            break
 
-            # Parse SSE data - it's JSON with "content" field
-            try:
-                parsed = json.loads(data)
-                content = parsed.get("content", "")
-            except (json.JSONDecodeError, TypeError):
-                # Not JSON or invalid - use as-is
-                content = data
+        remaining_timeout = timeout - elapsed
 
-            if not content:
-                continue
+        try:
+            received_any_data = False
+            async for data in client.stream_sse(log_url, remaining_timeout):
+                received_any_data = True
 
-            # Process each line in content
-            for line in content.splitlines():
-                if not line.strip():
+                # Check timeout
+                if time.monotonic() - start_time >= timeout:
+                    timeout_reached = True
+                    break
+
+                # Parse SSE data - it's JSON with "content" field
+                try:
+                    parsed = json.loads(data)
+                    content = parsed.get("content", "")
+                except (json.JSONDecodeError, TypeError):
+                    # Not JSON or invalid - use as-is
+                    content = data
+
+                if not content:
                     continue
 
-                # Check for end markers (before filtering!)
-                if _check_end_markers(line, end_markers):
-                    end_marker_found = True
-                    # Still add the line with end marker
+                # Process each line in content
+                for line in content.splitlines():
+                    if not line.strip():
+                        continue
+
+                    # Check for end markers (before filtering!)
+                    if _check_end_markers(line, end_markers):
+                        end_marker_found = True
+                        # Still add the line with end marker
+                        parsed_line = _parse_log_line(line, keep_timestamp)
+                        if _apply_filter(parsed_line, filter_pattern):
+                            line_size = len(parsed_line.encode("utf-8")) + 1  # +1 for newline
+                            if buffer_size + line_size <= max_size:
+                                buffer.append(parsed_line)
+                                buffer_size += line_size
+                        break
+
+                    # Parse and filter line
                     parsed_line = _parse_log_line(line, keep_timestamp)
-                    if _apply_filter(parsed_line, filter_pattern):
-                        line_size = len(parsed_line.encode("utf-8")) + 1  # +1 for newline
-                        if buffer_size + line_size <= max_size:
-                            buffer.append(parsed_line)
-                            buffer_size += line_size
+
+                    # Apply filter
+                    if not _apply_filter(parsed_line, filter_pattern):
+                        continue
+
+                    # Check size limit
+                    line_size = len(parsed_line.encode("utf-8")) + 1  # +1 for newline
+                    if buffer_size + line_size > max_size:
+                        size_limit_reached = True
+                        break
+
+                    buffer.append(parsed_line)
+                    buffer_size += line_size
+
+                if end_marker_found or size_limit_reached or timeout_reached:
                     break
 
-                # Parse and filter line
-                parsed_line = _parse_log_line(line, keep_timestamp)
-
-                # Apply filter
-                if not _apply_filter(parsed_line, filter_pattern):
-                    continue
-
-                # Check size limit
-                line_size = len(parsed_line.encode("utf-8")) + 1  # +1 for newline
-                if buffer_size + line_size > max_size:
-                    size_limit_reached = True
-                    break
-
-                buffer.append(parsed_line)
-                buffer_size += line_size
-
-            if end_marker_found or size_limit_reached:
+            # Exit retry loop if we found what we need or timed out
+            if end_marker_found or size_limit_reached or timeout_reached:
                 break
 
-    except GimsApiError as e:
-        connection_error = f"SSE connection error: {e.message}"
-    except asyncio.TimeoutError:
-        timeout_reached = True
-    except Exception as e:
-        connection_error = f"Unexpected error: {format_error(e)}"
+            # If connection closed without data and we have time left, wait and retry
+            if not received_any_data:
+                remaining = timeout - (time.monotonic() - start_time)
+                if remaining > retry_delay:
+                    await asyncio.sleep(retry_delay)
+                    continue  # Retry connection
+                else:
+                    # Not enough time left for retry, wait for remaining time
+                    if remaining > 0:
+                        await asyncio.sleep(remaining)
+                    timeout_reached = True
+                    break
+            else:
+                # We received data but connection closed - check if we should wait for more
+                if buffer:
+                    # We have some data, connection just closed normally
+                    break
+                # No useful data received, retry
+                remaining = timeout - (time.monotonic() - start_time)
+                if remaining > retry_delay:
+                    await asyncio.sleep(retry_delay)
+                    continue
+                else:
+                    timeout_reached = True
+                    break
+
+        except GimsApiError as e:
+            connection_error = f"SSE connection error: {e.message}"
+            # On connection error, wait and retry
+            remaining = timeout - (time.monotonic() - start_time)
+            if remaining > retry_delay:
+                await asyncio.sleep(retry_delay)
+                connection_error = None  # Clear error if we're retrying
+                continue
+            break
+        except asyncio.TimeoutError:
+            timeout_reached = True
+            break
+        except Exception as e:
+            connection_error = f"Unexpected error: {format_error(e)}"
+            break
 
     # Build result
     result_lines = buffer
