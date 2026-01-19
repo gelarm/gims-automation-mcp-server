@@ -269,6 +269,165 @@ async def _export_datasource_type(client: GimsClient, arguments: dict) -> list[T
     return [TextContent(type="text", text=response)]
 
 
+# ==================== Import Helpers ====================
+
+
+async def _resolve_reference_ids(client: GimsClient) -> tuple[dict[str, int], dict[str, int]]:
+    """Get name -> id mappings for value_types and sections."""
+    value_types = await client.list_value_types()
+    sections = await client.list_property_sections()
+
+    vt_map = {vt["name"]: vt["id"] for vt in value_types}
+    sec_map = {s["name"]: s["id"] for s in sections}
+
+    return vt_map, sec_map
+
+
+async def _import_properties(
+    client: GimsClient,
+    type_id: int,
+    properties: list[dict],
+    is_datasource: bool,
+    vt_map: dict[str, int],
+    sec_map: dict[str, int],
+) -> dict:
+    """Import properties for a datasource or activator type.
+
+    Args:
+        client: GIMS API client.
+        type_id: ID of the datasource or activator type.
+        properties: List of property data from deserialized Git files.
+        is_datasource: True for datasource type, False for activator type.
+        vt_map: value_type name -> id mapping.
+        sec_map: section name -> id mapping.
+
+    Returns:
+        Import result dict with created/skipped counts and errors.
+    """
+    result = {"created": 0, "skipped": 0, "errors": []}
+
+    for prop in properties:
+        name = prop.get("name", "")
+        label = prop.get("label", name)
+        value_type_name = prop.get("value_type", "")
+        section_name = prop.get("section", "Основные")
+
+        # Resolve value_type_id
+        value_type_id = vt_map.get(value_type_name)
+        if value_type_id is None:
+            result["skipped"] += 1
+            result["errors"].append(f"Property '{name}': unknown value_type '{value_type_name}'")
+            continue
+
+        # Resolve section_id
+        section_id = sec_map.get(section_name)
+        if section_id is None:
+            result["skipped"] += 1
+            result["errors"].append(f"Property '{name}': unknown section '{section_name}'")
+            continue
+
+        try:
+            if is_datasource:
+                await client.create_datasource_type_property(
+                    mds_type_id=type_id,
+                    name=name,
+                    label=label,
+                    value_type_id=value_type_id,
+                    section_name_id=section_id,
+                    description=prop.get("description", ""),
+                    default_value=prop.get("default_value", ""),
+                    is_required=prop.get("is_required", False),
+                    is_hidden=prop.get("is_hidden", False),
+                )
+            else:
+                await client.create_activator_type_property(
+                    activator_type_id=type_id,
+                    name=name,
+                    label=label,
+                    value_type_id=value_type_id,
+                    section_name_id=section_id,
+                    description=prop.get("description", ""),
+                    default_value=prop.get("default_value", ""),
+                    is_required=prop.get("is_required", False),
+                    is_hidden=prop.get("is_hidden", False),
+                )
+            result["created"] += 1
+        except GimsApiError as e:
+            result["skipped"] += 1
+            result["errors"].append(f"Property '{name}': {e.message}")
+
+    return result
+
+
+async def _import_methods(
+    client: GimsClient,
+    type_id: int,
+    methods: list[dict],
+    vt_map: dict[str, int],
+) -> dict:
+    """Import methods and their parameters for a datasource type.
+
+    Args:
+        client: GIMS API client.
+        type_id: ID of the datasource type.
+        methods: List of method data from deserialized Git files.
+        vt_map: value_type name -> id mapping.
+
+    Returns:
+        Import result dict with created counts and errors.
+    """
+    result = {"created": 0, "parameters_created": 0, "errors": []}
+
+    for method in methods:
+        name = method.get("name", "")
+        label = method.get("label", name)
+        code = method.get("code", "# No code")
+        description = method.get("description", "")
+
+        try:
+            created_method = await client.create_datasource_type_method(
+                mds_type_id=type_id,
+                name=name,
+                label=label,
+                code=code,
+                description=description,
+            )
+            result["created"] += 1
+
+            # Import parameters for this method
+            method_id = created_method["id"]
+            for param in method.get("parameters", []):
+                param_label = param.get("label", "")
+                value_type_name = param.get("value_type", "")
+
+                # Resolve value_type_id
+                value_type_id = vt_map.get(value_type_name)
+                if value_type_id is None:
+                    result["errors"].append(
+                        f"Method '{label}' param '{param_label}': unknown value_type '{value_type_name}'"
+                    )
+                    continue
+
+                try:
+                    await client.create_method_parameter(
+                        method_id=method_id,
+                        label=param_label,
+                        value_type_id=value_type_id,
+                        input_type=param.get("input_type", True),
+                        default_value=param.get("default_value", ""),
+                        description=param.get("description", ""),
+                        is_hidden=param.get("is_hidden", False),
+                    )
+                    result["parameters_created"] += 1
+                except GimsApiError as e:
+                    result["errors"].append(f"Method '{label}' param '{param_label}': {e.message}")
+
+        except GimsApiError as e:
+            result["errors"].append(f"Method '{label}': {e.message}")
+
+    return result
+
+
 # ==================== Import Datasource Type ====================
 
 
@@ -304,32 +463,52 @@ async def _import_datasource_type(client: GimsClient, arguments: dict) -> list[T
         response = check_response_size(result)
         return [TextContent(type="text", text=response)]
 
-    # For now, import only creates basic type without properties/methods
-    # Full import would require more complex logic
+    # Create or update base type
     if existing and update_existing:
         await client.update_datasource_type(
             existing["id"],
             description=data.get("description"),
             version=data.get("version"),
         )
-        result = {
-            "action": "updated",
-            "type_id": existing["id"],
-            "name": name,
-            "note": "Обновлены только основные поля. Свойства и методы требуют отдельного обновления.",
-        }
+        type_id = existing["id"]
+        action = "updated"
     else:
         created = await client.create_datasource_type(
             name=name,
             description=data.get("description", ""),
             version=data.get("version", "1.0"),
         )
-        result = {
-            "action": "created",
-            "type_id": created["id"],
-            "name": name,
-            "note": "Создан тип без свойств и методов. Используйте API для добавления.",
-        }
+        type_id = created["id"]
+        action = "created"
+
+    # Resolve reference IDs for properties and methods
+    vt_map, sec_map = await _resolve_reference_ids(client)
+
+    # Import properties
+    properties_result = await _import_properties(
+        client=client,
+        type_id=type_id,
+        properties=data.get("properties", []),
+        is_datasource=True,
+        vt_map=vt_map,
+        sec_map=sec_map,
+    )
+
+    # Import methods (only for new types or if update_existing)
+    methods_result = await _import_methods(
+        client=client,
+        type_id=type_id,
+        methods=data.get("methods", []),
+        vt_map=vt_map,
+    )
+
+    result = {
+        "action": action,
+        "type_id": type_id,
+        "name": name,
+        "properties": properties_result,
+        "methods": methods_result,
+    }
 
     response = check_response_size(result)
     return [TextContent(type="text", text=response)]
@@ -399,6 +578,7 @@ async def _import_activator_type(client: GimsClient, arguments: dict) -> list[Te
         response = check_response_size(result)
         return [TextContent(type="text", text=response)]
 
+    # Create or update base type
     if existing and update_existing:
         await client.update_activator_type(
             existing["id"],
@@ -406,12 +586,8 @@ async def _import_activator_type(client: GimsClient, arguments: dict) -> list[Te
             description=data.get("description"),
             version=data.get("version"),
         )
-        result = {
-            "action": "updated",
-            "type_id": existing["id"],
-            "name": name,
-            "note": "Обновлены только основные поля. Свойства требуют отдельного обновления.",
-        }
+        type_id = existing["id"]
+        action = "updated"
     else:
         created = await client.create_activator_type(
             name=name,
@@ -419,12 +595,28 @@ async def _import_activator_type(client: GimsClient, arguments: dict) -> list[Te
             description=data.get("description", ""),
             version=data.get("version", "1.0"),
         )
-        result = {
-            "action": "created",
-            "type_id": created["id"],
-            "name": name,
-            "note": "Создан тип без свойств. Используйте API для добавления.",
-        }
+        type_id = created["id"]
+        action = "created"
+
+    # Resolve reference IDs for properties
+    vt_map, sec_map = await _resolve_reference_ids(client)
+
+    # Import properties
+    properties_result = await _import_properties(
+        client=client,
+        type_id=type_id,
+        properties=data.get("properties", []),
+        is_datasource=False,
+        vt_map=vt_map,
+        sec_map=sec_map,
+    )
+
+    result = {
+        "action": action,
+        "type_id": type_id,
+        "name": name,
+        "properties": properties_result,
+    }
 
     response = check_response_size(result)
     return [TextContent(type="text", text=response)]

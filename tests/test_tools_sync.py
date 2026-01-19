@@ -461,6 +461,9 @@ class TestImportDatasourceTypeTool:
         mock_api.post("/datasource_types/ds_type/").mock(
             return_value=Response(201, json={"id": 10, "name": "New Type"})
         )
+        # Mock reference endpoints for property import
+        mock_api.get("/rest/value_types/").mock(return_value=Response(200, json=[]))
+        mock_api.get("/rest/property_sections/").mock(return_value=Response(200, json=[]))
 
         files = {
             "meta.yaml": "name: New Type\ndescription: A new type",
@@ -477,6 +480,8 @@ class TestImportDatasourceTypeTool:
         data = json.loads(result[0].text)
         assert data["action"] == "created"
         assert data["type_id"] == 10
+        assert data["properties"]["created"] == 0
+        assert data["methods"]["created"] == 0
         await client.close()
 
     @pytest.mark.asyncio
@@ -512,6 +517,9 @@ class TestImportActivatorTypeTool:
         mock_api.post("/activator_types/activator_type/").mock(
             return_value=Response(201, json={"id": 10, "name": "New Activator"})
         )
+        # Mock reference endpoints for property import
+        mock_api.get("/rest/value_types/").mock(return_value=Response(200, json=[]))
+        mock_api.get("/rest/property_sections/").mock(return_value=Response(200, json=[]))
 
         files = {
             "meta.yaml": "name: New Activator\ndescription: A new activator",
@@ -529,6 +537,7 @@ class TestImportActivatorTypeTool:
         data = json.loads(result[0].text)
         assert data["action"] == "created"
         assert data["type_id"] == 10
+        assert data["properties"]["created"] == 0
         await client.close()
 
     @pytest.mark.asyncio
