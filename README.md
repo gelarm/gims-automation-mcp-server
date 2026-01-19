@@ -93,7 +93,7 @@ MCP сервер автоматически обновляет access token пр
 Ошибка аутентификации: токен обновления недействителен. Проверьте учётную запись и получите новые токены в GIMS.
 ```
 
-## Доступные Tools (49)
+## Доступные Tools (57)
 
 ### Scripts (11 tools)
 
@@ -207,6 +207,70 @@ MCP сервер автоматически обновляет access token пр
 |------|----------|
 | `list_value_types` | Типы значений (только чтение) |
 | `list_property_sections` | Разделы свойств (только чтение) |
+
+### Git Sync (8 tools)
+
+Tools для синхронизации компонентов автоматизации с Git-репозиторием.
+
+#### Экспорт (3 tools)
+
+| Tool | Описание |
+|------|----------|
+| `export_script` | Экспорт скрипта в Git-формат (meta.yaml + code.py) |
+| `export_datasource_type` | Экспорт типа ИД со всеми методами и свойствами |
+| `export_activator_type` | Экспорт типа активатора со свойствами и кодом |
+
+#### Импорт (3 tools)
+
+| Tool | Описание |
+|------|----------|
+| `import_script` | Импорт скрипта с валидацией Python синтаксиса |
+| `import_datasource_type` | Импорт типа ИД |
+| `import_activator_type` | Импорт типа активатора |
+
+#### Вспомогательные (2 tools)
+
+| Tool | Описание |
+|------|----------|
+| `validate_python_code` | Проверка синтаксиса Python через ast.parse() |
+| `compare_with_git` | Сравнение версии в GIMS с Git (по updated_at/exported_at) |
+
+#### Структура Git-репозитория
+
+```
+automation-components/
+├── scripts/
+│   └── <script_folder>/
+│       ├── meta.yaml
+│       └── code.py
+├── datasource_types/
+│   └── <type_folder>/
+│       ├── meta.yaml
+│       ├── properties.yaml
+│       └── methods/
+│           └── <method_label>/
+│               ├── meta.yaml
+│               ├── code.py
+│               └── params.yaml
+└── activator_types/
+    └── <type_folder>/
+        ├── meta.yaml
+        ├── code.py
+        └── properties.yaml
+```
+
+#### Git-операции
+
+Git-операции выполняются через Bash tool (не через MCP):
+
+```bash
+git config user.name   # Проверить конфигурацию перед commit
+git config user.email
+git pull origin main
+git add scripts/my_script/
+git commit -m "Export script 'My Script'"
+git push origin main
+```
 
 ## Разработка
 
