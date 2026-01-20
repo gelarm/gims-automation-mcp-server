@@ -21,7 +21,7 @@ pip install git+ssh://git@gitlab.gelarm.ru/gelarm/gims-automation-mcp-server.git
 ### Из GitHub
 
 ```bash
-pip install https://github.com/gelarm/gims-automation-mcp-server.git
+pip install git+https://github.com/gelarm/gims-automation-mcp-server.git
 ```
 
 
@@ -31,6 +31,12 @@ pip install https://github.com/gelarm/gims-automation-mcp-server.git
 git clone git@gitlab.gelarm.ru:gelarm/gims-automation-mcp-server.git
 cd gims-automation-mcp-server
 pip install -e ".[dev]"
+```
+
+### Справка
+
+```bash
+gims-mcp-server --help
 ```
 
 ## Конфигурация
