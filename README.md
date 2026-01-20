@@ -18,6 +18,13 @@ MCP (Model Context Protocol) сервер для интеграции coding-а�
 pip install git+ssh://git@gitlab.gelarm.ru/gelarm/gims-automation-mcp-server.git
 ```
 
+### Из GitHub
+
+```bash
+pip install https://github.com/gelarm/gims-automation-mcp-server.git
+```
+
+
 ### Для разработки
 
 ```bash
