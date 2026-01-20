@@ -24,6 +24,10 @@ pip install git+ssh://git@gitlab.gelarm.ru/gelarm/gims-automation-mcp-server.git
 pip install git+https://github.com/gelarm/gims-automation-mcp-server.git
 ```
 
+### Документация
+
+- [Инструкции для LLM агентов](docs/README.md)
+
 
 ### Для разработки
 
